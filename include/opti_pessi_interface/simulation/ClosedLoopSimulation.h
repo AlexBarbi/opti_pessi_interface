@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include <ocs2_ipm/IpmSolver.h>
+#include <ocs2_ipm/IpmMpc.h>
 
 #include "opti_pessi_interface/OptiPessiInterface.h"
 #include "opti_pessi_interface/definitions.h"
@@ -51,7 +51,23 @@ struct ClosedLoopResult {
  * reported per step in appliedPessiScale, never silently accepted.
  *
  * If every attempt fails, a saturated fallback input is integrated instead (fallbackSteps).
+ *
+ * REAL-TIME ITERATION
+ *
+ * With realTimeIteration = true the retry ladder above is switched OFF: exactly one solve per
+ * control step, always warm-started from the shifted previous solution, and the result is always
+ * kept as the next warm start whether or not the plan is trustworthy. That is the RTI contract --
+ * the iterate converges along the closed loop rather than within a step, so discarding it and
+ * re-solving cold would defeat the scheme and blow the per-step budget the scheme exists to respect.
+ *
+ * What is NOT switched off is the sanity gate on the APPLIED input: an insane or wildly infeasible
+ * first input still falls back to the saturated / capture-point step, and still counts in
+ * fallbackSteps. RTI bounds the computation per step; it does not make a bad step safe to execute.
+ * relaxedSteps stays 0 in this mode because the keep-out continuation never runs.
+ *
+ * @param mpc  ocs2::IpmMpc built for this interface's problem and bound to its reference manager.
  */
-ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::IpmSolver& solver, bool verbose);
+ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::IpmMpc& mpc, bool verbose,
+                                         bool realTimeIteration = false);
 
 }  // namespace opti_pessi

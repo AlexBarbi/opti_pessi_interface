@@ -1,12 +1,14 @@
+// Standalone benchmark of the planner against a scripted obstacle plant: no robot, no WBC, the LIP
+// itself is the plant (see ClosedLoopSimulation). Used to compare a scenario against the CasADi/IPOPT
+// reference and to report solve times; the Gazebo loop runs OptiPessiController instead.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <string>
 
-#include <ocs2_ipm/IpmSolver.h>
-
 #include "opti_pessi_interface/OptiPessiInterface.h"
+#include "opti_pessi_interface/SolverBackend.h"
 #include "opti_pessi_interface/simulation/ClosedLoopSimulation.h"
 #include "opti_pessi_interface/simulation/NpyIo.h"
 
@@ -48,10 +50,15 @@ void dumpTrajectories(const OptiPessiModelParameters& params, const ClosedLoopRe
 }
 
 void printUsage(const char* argv0) {
-  std::cerr << "Usage: " << argv0 << " <taskFile> <scenarioFile> [libraryFolder] [--no-recompile] [--quiet]\n"
+  std::cerr << "Usage: " << argv0 << " <taskFile> <scenarioFile> [libraryFolder] [--solver ipm|sqp] [--rti]"
+            << " [--no-recompile] [--quiet]\n"
             << "  taskFile       config/task.info\n"
             << "  scenarioFile   config/scenario_S4.info\n"
             << "  libraryFolder  CppAD library folder (default /tmp/ocs2/opti_pessi_interface)\n"
+            << "  --solver       ipm (default, hard inequalities) or sqp (relaxed-barrier soft\n"
+            << "                 inequalities -- SqpSolver's QP has no inequality rows)\n"
+            << "  --rti          SQP only: one Newton step per control step, always warm-started,\n"
+            << "                 no cold retry and no keep-out continuation (real-time iteration)\n"
             << "  --no-recompile reuse the CppAD libraries already in libraryFolder\n";
 }
 
@@ -63,11 +70,13 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const std::string taskFile = argv[1];
+  const std::string optipessiFile = argv[1];
   const std::string scenarioFile = argv[2];
   std::string libraryFolder = "/tmp/ocs2/opti_pessi_interface";
   bool recompile = true;
   bool verbose = true;
+  SolverBackend backend = SolverBackend::Ipm;
+  bool realTimeIteration = false;
 
   for (int i = 3; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -75,6 +84,20 @@ int main(int argc, char** argv) {
       recompile = false;
     } else if (arg == "--quiet") {
       verbose = false;
+    } else if (arg == "--rti") {
+      realTimeIteration = true;
+    } else if (arg == "--solver") {
+      if (i + 1 >= argc) {
+        printUsage(argv[0]);
+        return 1;
+      }
+      try {
+        backend = solverBackendFromString(argv[++i]);
+      } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        printUsage(argv[0]);
+        return 1;
+      }
     } else if (arg.rfind("--", 0) == 0) {
       printUsage(argv[0]);
       return 1;
@@ -83,16 +106,24 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (backend != SolverBackend::Ipm || realTimeIteration) {
+    std::cerr << "The closed loop runs on ocs2::IpmMpc: --solver sqp and --rti (SQP only) are not supported.\n";
+    return 1;
+  }
+
   try {
-    OptiPessiInterface interface(taskFile, scenarioFile, libraryFolder, recompile, verbose);
+    OptiPessiInterface interface(optipessiFile, scenarioFile, libraryFolder, recompile, verbose);
     std::cout << "Built the Opti-Pessi optimal control problem: stateDim=" << interface.stateDim()
               << " inputDim=" << interface.inputDim() << " numObstacles=" << interface.numObstacles() << "\n";
 
-    ocs2::IpmSolver solver(interface.ipmSettings(), interface.getOptimalControlProblem(), interface.getInitializer());
-    solver.setReferenceManager(interface.getReferenceManagerPtr());
+    interface.setupOptimalControlProblem(libraryFolder, recompile, backend);
 
-    std::cout << "\nSimulating Opti-Pessi MPC\n";
-    const ClosedLoopResult result = runClosedLoopSimulation(interface, solver, verbose);
+    ocs2::IpmMpc mpc(interface.mpcSettings(), interface.ipmSettings(), interface.getOptimalControlProblem(),
+                     interface.getInitializer());
+    mpc.getSolverPtr()->setReferenceManager(interface.getReferenceManagerPtr());
+
+    std::cout << "\nSimulating Opti-Pessi MPC  [solver=" << toString(backend) << "]\n";
+    const ClosedLoopResult result = runClosedLoopSimulation(interface, mpc, verbose, realTimeIteration);
     const auto& params = interface.modelParameters();
 
     std::cout << "\nCollision:             " << (result.collision ? "yes" : "no") << "\n";

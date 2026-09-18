@@ -1,3 +1,10 @@
+// Loads the two config files into one parameter struct: task.info (model, cost, limits, horizon) and
+// the scenario file (goal, obstacle count and plant).
+//
+// Almost everything loaded here is COMPILED INTO the generated CppAD libraries. The exceptions are the
+// per-slot obstacle parameters and the goal, which the reference manager passes at runtime. Editing
+// task.info therefore requires recompile:=true, or a stale libraryFolder silently yields a different
+// controller. See OptiPessiInterface::setupOptimalControlProblem().
 #include "opti_pessi_interface/OptiPessiModelParameters.h"
 
 #include <algorithm>
@@ -119,6 +126,13 @@ OptiPessiModelParameters loadOptiPessiModelParameters(const std::string& taskFil
     throw std::runtime_error("[OptiPessiModelParameters] horizon.N must be at least 2.");
   }
 
+  printHeader("Opti-Pessi Obstacle Types", verbose);
+  for (const auto& [name, type] : {std::make_pair("human", ObstacleType::Human), std::make_pair("car", ObstacleType::Car)}) {
+    auto& model = p.obstacleTypes[static_cast<size_t>(type)];
+    ocs2::loadData::loadPtreeValue(task, model.radius, std::string("obstacleTypes.") + name + ".radius", verbose);
+    ocs2::loadData::loadPtreeValue(task, model.maxSpeed, std::string("obstacleTypes.") + name + ".maxSpeed", verbose);
+  }
+
   p.initialState.setZero(OptiPessiModelParameters::kMeasuredStateDim);
   ocs2::loadData::loadEigenMatrix(taskFile, "initialState", p.initialState);
   if (verbose) {
@@ -180,6 +194,7 @@ OptiPessiModelParameters loadOptiPessiModelParameters(const std::string& taskFil
   ocs2::loadData::loadPtreeValue(scenario, p.simTime, "simulation.simTime", verbose);
   ocs2::loadData::loadPtreeValue(scenario, p.goalTolerance, "simulation.goalTolerance", verbose);
   ocs2::loadData::loadPtreeValue(scenario, p.figName, "simulation.figName", verbose);
+  ocs2::loadData::loadPtreeValue(scenario, p.obstacleDetour, "simulation.obstacleDetour", verbose);
 
   if (verbose) {
     std::cerr << " #### =============================================================================" << std::endl;

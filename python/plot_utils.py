@@ -20,10 +20,10 @@ DEFAULT_AXES_LABEL_SIZE = DEFAULT_FONT_SIZE;  # fontsize of the x any y labels
 DEFAULT_TEXT_USE_TEX = False;
 LINE_ALPHA = 0.9;
 SAVE_FIGURES = True;
-FILE_EXTENSIONS = ['pdf', 'png']; #,'eps'];
+FILE_EXTENSIONS = ['png']; #,'eps'];
 FIGURES_DPI = 150;
 SHOW_FIGURES = False;
-FIGURE_PATH = '';
+FIGURE_PATH = 'src/legged_control/opti_pessi_interface/python/plots/';
 
 mpl.rcdefaults()
 mpl.rcParams['figure.autolayout']   = True;
