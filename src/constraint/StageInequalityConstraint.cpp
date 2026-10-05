@@ -117,12 +117,14 @@ void appendPathRows(Vec& g, int& idx, const Vec& x, const Vec& xNext, const Opti
   // moved to by the end of it. This is what caps stride length.
   const Vec2 hip0(hipsAndSigns(0), hipsAndSigns(1));
   const Vec2 hip1(hipsAndSigns(2), hipsAndSigns(3));
-  reach(Vec2(x(RobotX::P0X), x(RobotX::P0Y)), hip0, Scalar(hipsAndSigns(4)));
-  reach(Vec2(x(RobotX::P1X), x(RobotX::P1Y)), hip1, Scalar(hipsAndSigns(5)));
-
+  
   // The commanded landing footholds must be reachable from that same base.
   const Vec2 nextHip0(hipsAndSigns(6), hipsAndSigns(7));
   const Vec2 nextHip1(hipsAndSigns(8), hipsAndSigns(9));
+
+  reach(Vec2(x(RobotX::P0X), x(RobotX::P0Y)), nextHip0, Scalar(hipsAndSigns(4)));
+  reach(Vec2(x(RobotX::P1X), x(RobotX::P1Y)), nextHip1, Scalar(hipsAndSigns(5)));
+  
   reach(Vec2(xNext(RobotX::P0X), xNext(RobotX::P0Y)), nextHip0, Scalar(hipsAndSigns(10)));
   reach(Vec2(xNext(RobotX::P1X), xNext(RobotX::P1Y)), nextHip1, Scalar(hipsAndSigns(11)));
 }

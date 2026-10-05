@@ -108,9 +108,9 @@ ipm
   computeLagrangeMultipliers     false
   initialBarrierParameter        1e-2
   targetBarrierParameter         1e-4
-  nThreads                       4
+  nThreads                       1
   printSolverStatus              false
-  printSolverStatistics          false
+  printSolverStatistics          true
   printLinesearch                false
 }
 

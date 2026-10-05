@@ -146,11 +146,10 @@ From the applied input `u` and the phase start state `x`, every control tick bui
 At the end of the phase, the swing pair becomes the stance pair with its touchdown forces, the old
 stance pair stays down unloaded, and the next phase is measured.
 
-**Goal reached.** When the measured CoM is within the scenario's `goalTolerance` of the goal,
-`holdStance()` puts all four feet down at `m g / 4` each and holds the CoM and heading. With
-`scenario_S1.info` the tolerance is 0.01 m, so this rarely fires. A new goal away from the robot calls
-`restartFromStance()`: the swinging feet go straight down, the robot settles, and the walk starts again
-from phase 0.
+**Goal reached.** When the measured CoM is within the scenario's `goalTolerance` of the goal, the
+controller logs it once for that goal and does nothing else. The MPC keeps running, so the robot steps in
+place at the goal and follows a new goal at once, with no restart. With `scenario_S1.info` the tolerance
+is 0.01 m.
 
 ### Goal and obstacles
 
