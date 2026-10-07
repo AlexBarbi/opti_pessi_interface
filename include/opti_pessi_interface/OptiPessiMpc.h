@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <ocs2_ipm/IpmSolver.h>
@@ -71,6 +72,24 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
   /** Written on the MPC thread after every solve, safe to read from any thread. */
   SolveStatistics getLastSolveStatistics() const;
 
+  /** Totals over every solve since construction: reset() does not clear them. */
+  struct SolveTotals {
+    size_t solves = 0;
+    size_t samePhase = 0;         // warm-started from the solution of the same phase
+    size_t shifted = 0;           // warm-started from the previous phase's solution, shifted
+    size_t cold = 0;              // started cold: no previous solution
+    size_t coldRetries = 0;       // cold starts after the solver failed on the warm start
+    size_t unsolved = 0;          // the solver failed on every start: nothing published
+    size_t iterations = 0;        // of the last run of each solve
+    size_t atIterationCap = 0;    // solves whose last run stopped at ipmIteration
+    scalar_t solveTimeSum = 0.0;  // [ms], wall clock, retries included
+    scalar_t solveTimeMax = 0.0;  // [ms]
+    std::string solverProfile;    // ocs2's own profile of the solver, over its runs since its last reset (a cold start)
+  };
+
+  /** Safe to read from any thread. */
+  SolveTotals getSolveTotals() const;
+
  protected:
   void calculateController(scalar_t initTime, const vector_t& initState, scalar_t finalTime) override;
 
@@ -87,6 +106,7 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
   int lastGaitOffset_ = 0;             // phase lastSolution_ was solved for
   vector_t lastStartState_;            // measured LIP state lastSolution_ was solved from
   bool solverFailed_ = false;          // the solver's last run failed: its slacks and duals are not those of lastSolution_
+  size_t iterationCap_ = 0;            // ipm.ipmIteration
 
   mutable std::mutex planMutex_;
   Plan latestPlan_;
@@ -94,6 +114,7 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
 
   mutable std::mutex statisticsMutex_;
   SolveStatistics lastSolveStatistics_;
+  SolveTotals totals_;
 };
 
 }  // namespace opti_pessi

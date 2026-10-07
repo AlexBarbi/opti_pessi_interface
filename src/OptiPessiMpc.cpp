@@ -1,6 +1,7 @@
 #include "opti_pessi_interface/OptiPessiMpc.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <exception>
 
@@ -37,9 +38,11 @@ OptiPessiMpc::OptiPessiMpc(ocs2::mpc::Settings mpcSettings, ocs2::ipm::Settings 
                            const ocs2::OptimalControlProblem& optimalControlProblem, const ocs2::Initializer& initializer,
                            std::shared_ptr<OptiPessiReferenceManager> referenceManagerPtr, OptiPessiModelParameters params)
     : MPC_BASE(std::move(mpcSettings)),
-      solverPtr_(std::make_unique<ocs2::IpmSolver>(std::move(settings), optimalControlProblem, initializer)),
       referenceManagerPtr_(std::move(referenceManagerPtr)),
-      params_(std::move(params)) {}
+      params_(std::move(params)),
+      iterationCap_(settings.ipmIteration) {
+  solverPtr_ = std::make_unique<ocs2::IpmSolver>(std::move(settings), optimalControlProblem, initializer);
+}
 
 void OptiPessiMpc::reset() {
   MPC_BASE::reset();
@@ -110,12 +113,16 @@ void OptiPessiMpc::calculateController(scalar_t /*initTime*/, const vector_t& in
   }
 
   // The warm start, then a cold start if the solver failed on it. Nothing else.
+  const auto solveStart = std::chrono::steady_clock::now();
+  const bool samePhase = guessPtr == &lastSolution_;
   ocs2::PrimalSolution solution;
   bool solved = solve(robotState, guessPtr, solution);
-  if (!solved && guessPtr != nullptr) {
+  const bool coldRetry = !solved && guessPtr != nullptr;
+  if (coldRetry) {
     warmStart = "cold retry";
     solved = solve(robotState, nullptr, solution);
   }
+  const scalar_t solveTime = std::chrono::duration<scalar_t, std::milli>(std::chrono::steady_clock::now() - solveStart).count();
 
   // Statistics first: a controller that reads the plan as soon as it is published then finds the statistics of its solve.
   SolveStatistics statistics;
@@ -128,9 +135,22 @@ void OptiPessiMpc::calculateController(scalar_t /*initTime*/, const vector_t& in
   } catch (const std::exception&) {
     // The solver failed before its first iteration: it has no log.
   }
+  // The profile is read here, on the thread that runs the solver, so no other thread touches the solver's timers.
+  std::string solverProfile = solverPtr_->getBenchmarkingInfo();
   {
     std::lock_guard<std::mutex> lock(statisticsMutex_);
     lastSolveStatistics_ = statistics;
+    ++totals_.solves;
+    totals_.samePhase += samePhase ? 1 : 0;
+    totals_.shifted += guessPtr != nullptr && !samePhase ? 1 : 0;
+    totals_.cold += guessPtr == nullptr ? 1 : 0;
+    totals_.coldRetries += coldRetry ? 1 : 0;
+    totals_.unsolved += solved ? 0 : 1;
+    totals_.iterations += statistics.numIterations;
+    totals_.atIterationCap += statistics.numIterations >= iterationCap_ ? 1 : 0;
+    totals_.solveTimeSum += solveTime;
+    totals_.solveTimeMax = std::max(totals_.solveTimeMax, solveTime);
+    totals_.solverProfile = std::move(solverProfile);
   }
 
   published_ = solved;
@@ -166,6 +186,11 @@ OptiPessiMpc::Plan OptiPessiMpc::getLatestPlan() const {
 OptiPessiMpc::SolveStatistics OptiPessiMpc::getLastSolveStatistics() const {
   std::lock_guard<std::mutex> lock(statisticsMutex_);
   return lastSolveStatistics_;
+}
+
+OptiPessiMpc::SolveTotals OptiPessiMpc::getSolveTotals() const {
+  std::lock_guard<std::mutex> lock(statisticsMutex_);
+  return totals_;
 }
 
 }  // namespace opti_pessi

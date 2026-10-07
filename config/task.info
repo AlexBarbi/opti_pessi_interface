@@ -98,7 +98,7 @@ ipm
 {
   dt                             1.0
   integratorType                 EULER
-  ipmIteration                   100
+  ipmIteration                   10
   deltaTol                       1e-4
   costTol                        1e-4
   g_min                          1e-4
@@ -111,7 +111,7 @@ ipm
   targetBarrierParameter         1e-4
   nThreads                       1
   printSolverStatus              false
-  printSolverStatistics          true
+  printSolverStatistics          false
   printLinesearch                false
 }
 
