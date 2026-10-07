@@ -43,8 +43,8 @@ limits
   dtMax           0.25   ; [s]
   dtCost0         0.25   ; preferred contact-phase duration [s]
   footHipMax      0.15   ; foot-to-hip reachability radius [m]
-  dcxMax          3.5    ; body-frame longitudinal speed [m/s]
-  dcyMax          1.5    ; body-frame lateral speed [m/s]
+  dcxMax          2.5    ; body-frame longitudinal speed [m/s]
+  dcyMax          0.45    ; body-frame lateral speed [m/s]
   dthetaMax       0.6    ; yaw rate [rad/s]
 }
 
@@ -56,8 +56,8 @@ obstacleTypes
 {
   human
   {
-    radius    0.3   ; r_obs [m]
-    maxSpeed  2.0   ; v_obs [m/s], the bound the pessimistic branch is robust against
+    radius    0.2   ; r_obs [m]
+    maxSpeed  1.0   ; v_obs [m/s], the bound the pessimistic branch is robust against
   }
   car
   {
@@ -106,7 +106,8 @@ ipm
   useFeedbackPolicy              false
   createValueFunction            false
   computeLagrangeMultipliers     false
-  initialBarrierParameter        1e-2
+  initialSlackLowerBound         1e-2
+  initialBarrierParameter        1e-1
   targetBarrierParameter         1e-4
   nThreads                       1
   printSolverStatus              false
@@ -124,7 +125,7 @@ hpipm
 
 mpc
 {
-  timeHorizon                  3.0
+  N                           6.0
   solutionTimeWindow          -1
   coldStart                    false
   debugPrint                   false

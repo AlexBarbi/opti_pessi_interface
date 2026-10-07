@@ -174,24 +174,21 @@ goal-reached check still uses the real goal. RViz draws the active detour goal i
 
 ### What OptiPessiMpc publishes
 
-Each call is a single IPM solve: `solveWithRetries(…, realTimeIteration = true)`, so there is no cold
-retry and no keep-out continuation. The solve is judged by `evaluateSolve()`, which checks the dynamics
-residual and the constraint violation of the step about to be applied.
+Each call is one IPM solve, warm-started from the previous solution:
 
-* **Warm start**, only from solves that `evaluateSolve()` accepted:
-  * the same phase reuses the accepted solution as it is;
-  * the next phase uses it shifted by one knot (`shiftPrimalSolution`);
-  * anything else starts cold, including a phase whose shifted warm start was rejected.
-* **Solver reset after a rejected run.** `ocs2::IpmSolver` carries its slack and dual variables over
-  from its previous run whatever primal guess it is given, so they are cleared.
-* **Publishing:**
-  * an accepted solve is published as `nominal`;
-  * a rejected solve is published as `unchecked` while its phase has no nominal plan;
-  * a rejected re-solve of a phase that already has a nominal plan is dropped, and the log reports
-    `source=rejected`.
+* the same phase reuses that solution as it is;
+* the next phase uses it shifted by one knot (`shiftPrimalSolution`);
+* anything else (the first solve of a walk) starts cold.
 
-Warm-starting from rejected solves used to leave the solver stuck on its own failed output: fewer
-iterations on every solve, the same violated plan executed each time, and a fall a few phases later.
+If the solver fails on the warm start it is run once more from a cold start. "Fails" means it threw, or
+returned no complete, finite trajectory. Whatever the solver returns is published and becomes the next
+warm start: the solution is not checked against the dynamics or the constraints, and the controller
+applies it as it is, with no fallback. When the cold start fails too, nothing is published and the
+previous plan stays. `ocs2::IpmSolver` carries its slack and dual variables over from its previous run,
+so they are cleared before a cold start and after a failed run.
+
+The standalone closed loop (`opti_pessi_interface_mpc`) still uses `solveWithRetries()` and
+`evaluateSolve()`, with its cold retry, keep-out continuation and capture-point fallback.
 
 ### OptiPessiWbc
 
