@@ -34,7 +34,9 @@ struct SolveOutcome {
   scalar_t horizonResidual = 1e9;     // worst defect over the whole horizon
   scalar_t constraintViolation = 1e9; // worst path-inequality violation at the APPLIED knot
   scalar_t horizonViolation = 1e9;    // worst path-inequality violation anywhere on the horizon
-  bool ok = false;                    // the applied step is usable
+  bool ok = false;                    // the applied step is usable: it is judged on its own, not on the prediction
+  /** The solver's knot 1 is the state the applied input leads to, so the rest of the plan starts from the right state. */
+  bool dynamicsConsistent() const;
   /** The whole plan is feasible, so it is safe to warm-start the next solve from it. */
   bool planTrustworthy() const;
 };

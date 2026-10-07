@@ -89,6 +89,7 @@ reference manager from the MPC thread, so they cannot change while a solve is ru
 | `recompile` | `false` | regenerate the CppAD libraries |
 | `backend` | `Ipm` | `Ipm` or `Sqp` |
 | `obstacleDetour` | `true` | use `ObstacleDetour` (below) |
+| `phaseDiagnostics` | `false` | log the per-phase diagnostics block (see "Reading the per-phase log") |
 
 The LIP mass and yaw inertia come from the URDF (total mass, and the composite inertia about the
 vertical axis at the default stance and `comHeight`), not from `task.info`. Both are compiled into the
@@ -235,9 +236,12 @@ controller manager deactivates the controller: `[OptiPessi Controller] Safety ch
 
 ### Reading the per-phase log
 
-At the end of every phase the controller logs one block of lines for that phase. The first line
-`phase N: dt=… c=… theta=… v=…` is printed at the **start** of phase N: `c`, `theta` and `v` are the
-measured start state, and `dt` is the duration of the phase that just ended.
+The line `phase N: dt=… c=… theta=… v=…` is always printed, at the **start** of phase N: `c`, `theta`
+and `v` are the measured start state, and `dt` is the duration of the phase that just ended.
+
+With `phaseDiagnostics` on, the controller also logs the block of lines below at the end of every
+phase, about that phase. It is off by default. Launch with `phaseDiagnostics:=true`, or switch it on a
+running controller with `ros2 param set /legged_controller phaseDiagnostics true`.
 
 | line | fields |
 | --- | --- |

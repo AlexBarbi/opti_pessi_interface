@@ -73,7 +73,13 @@ std::unique_ptr<ocs2::PenaltyBase> makeRelaxedBarrier(scalar_t mu, scalar_t delt
   return std::make_unique<ocs2::RelaxedBarrierPenalty>(ocs2::RelaxedBarrierPenalty::Config(mu, delta));
 }
 
-/** Largest one-step dynamics residual accepted before the solve is treated as failed. */
+/**
+ * Largest one-step dynamics residual before the plan PAST the applied step is treated as starting from the wrong state.
+ *
+ * It does not reject the applied step: the rows that guard it are evaluated on lipMap(x_0, u_0), the state u_0 really
+ * leads to, not on the solver's own knot 1. A solve that stopped short of closing this defect can still hold a usable
+ * first input; what it cannot give is a prediction, so it is neither the next warm start nor a trustworthy plan.
+ */
 constexpr scalar_t kDynamicsResidualTolerance = 0.02;
 
 /**
@@ -141,8 +147,14 @@ SolveOutcome evaluateSolve(const ocs2::PrimalSolution& solution, const ocs2::Opt
   // x_0), interval 0 is active and its rows are exactly the ones that guard the executed step. That
   // was not true of the earlier knot-local transcription, which had to skip interval 0 and gate on
   // knot 1 instead.
+  //
+  // Only the optimistic branch's input is executed, so the pessimistic rows are checked with that input too: a solve that
+  // stopped before the two branches agreed on the first input (firstInputConsensus) proves nothing about the one applied.
+  vector_t consensusInput = out.solution.inputTrajectory_.front();
+  consensusInput.segment(RobotU::DIM, RobotU::DIM) = consensusInput.head(RobotU::DIM);
   out.constraintViolation =
-      appliedConstraintViolation(problem, 0.0, out.solution.stateTrajectory_.front(), out.solution.inputTrajectory_.front());
+      std::max(appliedConstraintViolation(problem, 0.0, out.solution.stateTrajectory_.front(), out.solution.inputTrajectory_.front()),
+               appliedConstraintViolation(problem, 0.0, out.solution.stateTrajectory_.front(), consensusInput));
   out.horizonViolation = 0.0;
   {
     const int knots = std::min(static_cast<int>(out.solution.inputTrajectory_.size()),
@@ -180,7 +192,8 @@ SolveOutcome evaluateSolve(const ocs2::PrimalSolution& solution, const ocs2::Opt
     return out;
   }
 
-  out.ok = out.dynamicsResidual < kDynamicsResidualTolerance && out.constraintViolation < kAppliedViolationTolerance;
+  // The applied step only: neither the horizon nor the solver's own successor (see kDynamicsResidualTolerance).
+  out.ok = out.constraintViolation < kAppliedViolationTolerance;
   return out;
 }
 
@@ -373,8 +386,12 @@ bool isInsane(const vector_t& robotState, const vector_t& robotInput, const Opti
   return false;
 }
 
+bool SolveOutcome::dynamicsConsistent() const {
+  return dynamicsResidual < kDynamicsResidualTolerance;
+}
+
 bool SolveOutcome::planTrustworthy() const {
-  return ok && horizonViolation < kPlanViolationTolerance;
+  return ok && dynamicsConsistent() && horizonViolation < kPlanViolationTolerance;
 }
 
 SolveOutcome OptiPessiInterface::solveControlStep(ocs2::IpmMpc& mpc, const vector_t& robotState,

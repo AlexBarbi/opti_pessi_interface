@@ -17,16 +17,19 @@ namespace opti_pessi {
 /**
  * IpmMpc for the Opti-Pessi OCP, run through MPC_MRT_Interface.
  *
- * Every solve starts at knot 0 (see definitions.h) and is a single attempt. Its robot inputs are published here
- * (getLatestPlan()) as "nominal" when evaluateSolve() accepts it. A rejected solve of a phase with no nominal plan yet is
- * published as "failed", without inputs: the controller stops the robot in stance on it and restarts the MPC cold with
- * reset(). A rejected re-solve of a phase that has one is dropped: the nominal plan stays. The MRT buffer only feeds
- * visualization, and only accepted solves reach it.
+ * Every solve starts at knot 0 (see definitions.h) and is judged by evaluateSolve() on the step it applies, not on its
+ * prediction. It is a single attempt, except that the first solve of a phase gets one cold retry when its warm start
+ * gave no trustworthy plan (see calculateController()). Its robot inputs are published here (getLatestPlan()) as "nominal" when that step is
+ * usable and the plan starts from the state it leads to, and as "first step" when only the step is usable (see
+ * calculateController()). A solve whose first step is rejected, of a phase with no plan yet, is published as "failed",
+ * without inputs: the controller stops the robot in stance on it and restarts the MPC cold with reset(). A re-solve of a
+ * phase that has a plan replaces it only if it is nominal. The MRT buffer only feeds visualization, and only published
+ * solves reach it.
  *
- * Only accepted solutions are carried forward as the next warm start, so the solver never restarts from its own failed
+ * Only nominal solutions are carried forward as the next warm start, so the solver never restarts from its own failed
  * output. On a phase change the solution is shifted one knot first (shiftPrimalSolution): its knot-0 footholds are the
  * ones the current stance feet already stand on, and reusing it unshifted would put both feet of each side in the same
- * place. A phase whose shifted warm start was rejected re-solves cold, and so does anything else.
+ * place. A phase whose shifted warm start did not give a nominal solve re-solves cold, and so does anything else.
  */
 class OptiPessiMpc final : public ocs2::MPC_BASE {
  public:
@@ -50,9 +53,9 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
     size_t phase = 0;              // contact phase (gait offset) it was solved for
     vector_t startState;           // measured 10-dof LIP state it was solved from
     std::vector<vector_t> inputs;  // robot inputs of knots 0..N-1; empty if failed
-    bool failed = false;           // evaluateSolve() rejected the solve: nothing to execute
+    bool failed = false;           // evaluateSolve() rejected the applied step: nothing to execute
     bool trustworthy = false;      // the whole horizon is feasible (diagnostics only)
-    const char* source = "none";   // "nominal" (evaluateSolve() accepted it) or "failed"
+    const char* source = "none";   // "nominal", "first step" (usable first step, no prediction) or "failed"
   };
 
   /** Sequence number of the latest published plan, cheap to poll from any thread. */
@@ -86,13 +89,13 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
   std::shared_ptr<OptiPessiReferenceManager> referenceManagerPtr_;
   OptiPessiModelParameters params_;
   std::unique_ptr<ocs2::OptimalControlProblem> evaluationProblemPtr_;  // own copy: the solver's CppAD models are not shared
-  ocs2::PrimalSolution lastSolution_;  // last solution evaluateSolve() accepted, the next warm start
+  ocs2::PrimalSolution lastSolution_;  // last nominal solution, the next warm start
   bool hasSolution_ = false;
-  bool nominalPublished_ = false;     // the latest solve was accepted and published, see run()
+  bool nominalPublished_ = false;     // the latest solve was published with inputs, see run()
   int lastGaitOffset_ = 0;            // phase lastSolution_ was solved for
   vector_t lastStartState_;           // measured LIP state lastSolution_ was solved from
-  bool shiftRejected_ = false;        // the shifted lastSolution_ was rejected as warm start of phase lastGaitOffset_ + 1
-  bool solverStateRejected_ = false;  // the solver's slacks and duals come from a rejected solve
+  bool shiftRejected_ = false;        // the shifted lastSolution_ gave no nominal solve of phase lastGaitOffset_ + 1
+  bool solverStateRejected_ = false;  // the solver's slacks and duals come from a solve that was not nominal
 
   mutable std::mutex planMutex_;
   Plan latestPlan_;
