@@ -98,7 +98,7 @@ ipm
 {
   dt                             1.0
   integratorType                 EULER
-  ipmIteration                   10
+  ipmIteration                   50
   deltaTol                       1e-4
   costTol                        1e-4
   g_min                          1e-4
