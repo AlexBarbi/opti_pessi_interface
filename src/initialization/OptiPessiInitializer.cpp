@@ -22,8 +22,7 @@ vector_t extractRobotInput(const vector_t& augmentedInput) {
   return augmentedInput.head(RobotU::DIM);
 }
 
-vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_t& robotState, int knotParity,
-                           const vector_t& initBias) {
+vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_t& robotState, int knotParity) {
   vector_t u = vector_t::Zero(RobotU::DIM);
   const auto next = gaitPair(knotParity + 1);
   const vector_t c = robotState.head(2);
@@ -34,8 +33,8 @@ vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_
 
   // Project the CoM forward with the LIP velocity term before placing the footholds.
   const vector_t cNextApprox = c + (std::sinh(w * dt) / w) * dc;
-  u.segment(RobotU::P0X, 2) = cNextApprox + applyR(theta, hipOf(params, next[0])) + initBias;
-  u.segment(RobotU::P1X, 2) = cNextApprox + applyR(theta, hipOf(params, next[1])) + initBias;
+  u.segment(RobotU::P0X, 2) = cNextApprox + applyR(theta, hipOf(params, next[0]));
+  u.segment(RobotU::P1X, 2) = cNextApprox + applyR(theta, hipOf(params, next[1]));
   u(RobotU::ALPHA) = 0.5;
   u(RobotU::DT) = params.dtCost0;
   u(RobotU::BETA) = 0.5;
@@ -103,8 +102,8 @@ vector_t nominalAugmentedInput(const OptiPessiModelParameters& params, const Opt
   const vector_t xOpti = augmentedState.segment(0, RobotX::DIM);
   const vector_t xPessi = augmentedState.segment(RobotX::DIM, RobotX::DIM);
 
-  u.segment(0, RobotU::DIM) = defaultRobotInput(params, xOpti, knotParity, referenceManager.getInitBias());
-  u.segment(RobotU::DIM, RobotU::DIM) = defaultRobotInput(params, xPessi, knotParity, referenceManager.getInitBias());
+  u.segment(0, RobotU::DIM) = defaultRobotInput(params, xOpti, knotParity);
+  u.segment(RobotU::DIM, RobotU::DIM) = defaultRobotInput(params, xPessi, knotParity);
   seedHyperplanes(u, optiHyperplaneOffset(), params, xOpti, referenceManager);
   seedHyperplanes(u, pessiHyperplaneOffset(numObstacles), params, xPessi, referenceManager);
   return u;
@@ -157,29 +156,6 @@ ocs2::PrimalSolution shiftPrimalSolution(const ocs2::PrimalSolution& solution, c
   out.stateTrajectory_[static_cast<size_t>(numStates - 1)] = solution.stateTrajectory_[static_cast<size_t>(numStates - 1)];
   out.stateTrajectory_[0] = packInitialState(robotState);
   return out;
-}
-
-ocs2::PrimalSolution rolloutGuess(const OptiPessiModelParameters& params, const OptiPessiReferenceManager& referenceManager,
-                                  const vector_t& robotState) {
-  ocs2::PrimalSolution solution;
-  vector_t x = packInitialState(robotState);
-  const int N = params.N;
-
-  for (int i = 0; i <= N; ++i) {
-    solution.timeTrajectory_.push_back(static_cast<scalar_t>(i));
-    solution.stateTrajectory_.push_back(x);
-    if (i == N) {
-      break;
-    }
-    const int knotParity = referenceManager.getGaitOffset() + i;
-    const vector_t u = nominalAugmentedInput(params, referenceManager, x, knotParity);
-    solution.inputTrajectory_.push_back(u);
-    x = augmentedLipStep(params, x, u);
-  }
-  if (!solution.inputTrajectory_.empty()) {
-    solution.inputTrajectory_.push_back(solution.inputTrajectory_.back());
-  }
-  return solution;
 }
 
 }  // namespace opti_pessi

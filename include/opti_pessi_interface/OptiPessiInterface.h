@@ -140,13 +140,9 @@ class OptiPessiInterface : public ocs2::RobotInterface {
 
   /** The backend setupOptimalControlProblem() was called with. */
   SolverBackend solverBackend() const { return backend_; }
-  const ocs2::rollout::Settings& rolloutSettings() const { return rolloutSettings_; }
   const ocs2::RolloutBase& getRollout() const { return *rolloutPtr_; }
 
   const OptiPessiModelParameters& modelParameters() const { return params_; }
-
-  /** Measured 10-dof robot state the simulation starts from (NOT the augmented state). */
-  const vector_t& getInitialState() const { return params_.initialState; }
 
   int numObstacles() const { return params_.numObstacles(); }
   int stateDim() const { return params_.stateDim(); }

@@ -22,10 +22,9 @@ include/opti_pessi_interface/
   definitions.h                     state/input layout, augmented dimensions, TIME CONVENTION note
   OptiPessiModelParameters.h        everything loaded from the .info files
   LipKinematics.h                   templated scalar/AD helpers, the exact discrete LIP map
-  OptiPessiReferenceManager.h       goal, measured obstacles, trot parity, homotopy knobs
+  OptiPessiReferenceManager.h       goal, measured obstacles, trot parity, keep-out homotopy knob
   OptiPessiInterface.h              : ocs2::RobotInterface, assembles the OptimalControlProblem
   OptiPessiMpc.h                    : ocs2::MPC_BASE run by OptiPessiController, publishes one Plan per solve
-  ObstacleDetour.h                  temporary OCP goal that walks around an obstacle blocking the goal
   dynamics/ cost/ constraint/ initialization/ simulation/
 src/                                mirrors include/, plus OptiPessiMpcNode.cpp (executable)
 test/                               testLipStep, testConfigLoading, testS4ClosedLoop
@@ -88,7 +87,6 @@ reference manager from the MPC thread, so they cannot change while a solve is ru
 | `libraryFolder` | `opti_pessi_interface/lib` (install share) | CppAD libraries, one subfolder per robot model |
 | `recompile` | `false` | regenerate the CppAD libraries |
 | `backend` | `Ipm` | `Ipm` or `Sqp` |
-| `obstacleDetour` | `true` | use `ObstacleDetour` (below) |
 | `phaseDiagnostics` | `false` | log the per-phase diagnostics block (see "Reading the per-phase log") |
 
 The LIP mass and yaw inertia come from the URDF (total mass, and the composite inertia about the
@@ -167,11 +165,6 @@ The OCP has a fixed number of obstacle slots, `obstacles.numObstacles` in the sc
 obstacles than slots, the ones whose keep-out disks come closest to the CoM take the slots. Free slots
 hold a point obstacle with zero radius and zero speed bound, parked 100 m away.
 
-With `obstacleDetour` on, `ObstacleDetour` replaces the OCP goal with a point past the tangent to an
-inflated disk around any obstacle that blocks the straight line to the goal. The short horizon never
-pays for walking around an obstacle, so without the detour the robot stalls at the grown keep-out. The
-goal-reached check still uses the real goal. RViz draws the active detour goal in cyan.
-
 ### What OptiPessiMpc publishes
 
 Each call is one IPM solve, warm-started from the previous solution:
@@ -233,12 +226,13 @@ controller manager deactivates the controller: `[OptiPessi Controller] Safety ch
 
 ### Reading the per-phase log
 
-The line `phase N: dt=… c=… theta=… v=…` is always printed, at the **start** of phase N: `c`, `theta`
-and `v` are the measured start state, and `dt` is the duration of the phase that just ended.
+The per-phase lines are logged only with `phaseDiagnostics` on. It is off by default. Launch with
+`phaseDiagnostics:=true`, or switch it on a running controller with
+`ros2 param set /legged_controller phaseDiagnostics true`.
 
-With `phaseDiagnostics` on, the controller also logs the block of lines below at the end of every
-phase, about that phase. It is off by default. Launch with `phaseDiagnostics:=true`, or switch it on a
-running controller with `ros2 param set /legged_controller phaseDiagnostics true`.
+The line `phase N: dt=… c=… theta=… v=…` comes at the **start** of phase N: `c`, `theta` and `v` are the
+measured start state, and `dt` is the duration of the phase that just ended. The block of lines below
+comes at the end of every phase, about that phase.
 
 | line | fields |
 | --- | --- |

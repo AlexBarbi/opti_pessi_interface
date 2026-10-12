@@ -12,7 +12,7 @@ namespace opti_pessi {
 /**
  * Carries the per-iteration, non-differentiated data of the Opti-Pessi OCP: the goal, the measured
  * obstacles (centre, radius and speed bound of each slot), the trot parity at the start of the
- * horizon, and two homotopy knobs used by the closed loop when a solve fails.
+ * horizon, and the keep-out homotopy knob used by the closed loop when a solve fails.
  *
  * Cost and constraint terms hold a const reference to this object and read it inside their
  * getParameters(...) hooks, so a change here is picked up by the next solve without rebuilding any
@@ -26,8 +26,7 @@ class OptiPessiReferenceManager : public ocs2::ReferenceManager {
         goal_(params.goal),
         obstacles_(params.obstaclePositions),
         obstacleRadii_(vector_t::Constant(params.numObstacles(), params.obstacleRadius)),
-        obstacleMaxSpeeds_(vector_t::Constant(params.numObstacles(), params.obstacleMaxSpeed)),
-        initBias_(vector_t::Zero(2)) {}
+        obstacleMaxSpeeds_(vector_t::Constant(params.numObstacles(), params.obstacleMaxSpeed)) {}
 
   ~OptiPessiReferenceManager() override = default;
 
@@ -38,10 +37,6 @@ class OptiPessiReferenceManager : public ocs2::ReferenceManager {
   /** Measured obstacle centres, numObstacles x 2. Held fixed inside one OCP solve. */
   const matrix_t& getObstacles() const { return obstacles_; }
   void setObstacles(const matrix_t& obstacles) { obstacles_ = obstacles; }
-
-  /** Keep-out radius r_obs and speed bound v_obs of each obstacle slot. */
-  const vector_t& getObstacleRadii() const { return obstacleRadii_; }
-  const vector_t& getObstacleMaxSpeeds() const { return obstacleMaxSpeeds_; }
 
   /** Centres, radii and speed bounds together. The number of slots is fixed by the OCP: sizes must match. */
   void setObstacles(const matrix_t& obstacles, const vector_t& radii, const vector_t& maxSpeeds) {
@@ -75,10 +70,6 @@ class OptiPessiReferenceManager : public ocs2::ReferenceManager {
   int getGaitOffset() const { return gaitOffset_; }
   void setGaitOffset(int gaitOffset) { gaitOffset_ = gaitOffset; }
 
-  /** World-frame offset added to the initializer's next footholds (retry homotopy). */
-  const vector_t& getInitBias() const { return initBias_; }
-  void setInitBias(const vector_t& initBias) { initBias_ = initBias; }
-
   /**
    * Multiplier on v_obstacle * elapsedTime in the pessimistic keep-out radius.
    * 1.0 reproduces the CasADi reference; smaller values relax the worst-case disk on retry.
@@ -92,7 +83,6 @@ class OptiPessiReferenceManager : public ocs2::ReferenceManager {
   vector_t obstacleRadii_;
   vector_t obstacleMaxSpeeds_;
   int gaitOffset_ = 0;
-  vector_t initBias_;
   scalar_t pessiScale_ = 1.0;
 };
 

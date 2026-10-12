@@ -34,12 +34,6 @@ namespace opti_pessi {
 namespace {
 
 /**
- * ocs2::ipm::loadSettings does not read the nested HPIPM settings, so the one value this problem
- * needs is loaded separately. Primal regularization keeps the QP subproblems solvable: the
- * hyperplane angles enter the collision rows through cos/sin of a decision variable, so the Hessian
- * is routinely indefinite.
- */
-/**
  * ocs2::{ipm,sqp}::loadSettings do not read the nested HPIPM settings, so the one value this problem
  * needs is loaded separately -- and separately PER BACKEND, because the two want opposite things.
  *
@@ -262,8 +256,6 @@ OptiPessiInterface::OptiPessiInterface(const std::string& optipessiFile, const s
   loadRelaxedBarrierSettings(optipessiFile, barrierMu_, barrierDelta_, verbose);
   mpcSettings_ = ocs2::mpc::loadSettings(optipessiFile, "mpc", verbose);
   rolloutSettings_ = ocs2::rollout::loadSettings(optipessiFile, "rollout", verbose);
-
-  // setupOptimalControlProblem(libraryFolder, recompile);
 }
 
 void OptiPessiInterface::setupOptimalControlProblem(const std::string& libraryFolder, bool recompile, SolverBackend backend) {
@@ -342,7 +334,7 @@ void OptiPessiInterface::setupOptimalControlProblem(const std::string& libraryFo
 // Note the parameter is deliberately named `params`, not `params_`: a parameter shadowing the
 // member of the same name makes it impossible to tell at a glance which one the body reads.
 void OptiPessiInterface::setupReferenceManager(const OptiPessiModelParameters& params) {
-  // Reference manager: goal, measured obstacles, trot parity, retry homotopy knobs.
+  // Reference manager: goal, measured obstacles, trot parity, keep-out homotopy knob.
   referenceManagerPtr_ = std::make_shared<OptiPessiReferenceManager>(params);
 
   // OCS2 requires a target trajectory even though the cost tracks the goal through the reference

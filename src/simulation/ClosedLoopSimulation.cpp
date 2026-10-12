@@ -7,7 +7,6 @@
 #include <iostream>
 
 #include "opti_pessi_interface/LipKinematics.h"
-#include "opti_pessi_interface/ObstacleDetour.h"
 #include "opti_pessi_interface/initialization/OptiPessiInitializer.h"
 #include "opti_pessi_interface/simulation/ObstaclePlant.h"
 
@@ -19,7 +18,7 @@ vector_t worldHip(const vector_t& robotState, const vector_t& hipBody) {
   return robotState.head(2) + applyR(robotState(RobotX::TH), hipBody);
 }
 
-// fallbackInput() (the capture-point stop) and saturateRobotInput() live in OptiPessiInterface: OptiPessiController uses them too.
+// fallbackInput() (the capture-point stop) and saturateRobotInput() live in OptiPessiInterface.
 
 /**
  * Speed past which the capture-point fallback has provably lost authority, so the run is over.
@@ -87,8 +86,6 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
   // control step cannot keep up with that disk as it inflates, so the better the start, the further
   // the iterate has fallen behind by the time the obstacle matters.
 
-  ObstacleDetour detour(params);
-
   const scalar_t goalToleranceSq = params.goalTolerance * params.goalTolerance;
   auto goalDistanceSq = [&](int step) {
     return std::pow(X(RobotX::CX, step) - params.goal(0), 2) + std::pow(X(RobotX::CY, step) - params.goal(1), 2);
@@ -97,17 +94,6 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
   while (t < params.simTime && goalDistanceSq(n) > goalToleranceSq) {
     referenceManagerPtr->setGaitOffset(n);
     referenceManagerPtr->setObstacles(plant.positions);
-    // The OCP tracks a detour goal while an obstacle blocks the line to the real goal (see ObstacleDetour.h); the
-    // termination test below keeps using the real goal.
-    const bool detourWasActive = detour.active();
-    referenceManagerPtr->setGoal(params.obstacleDetour ? detour.detourGoal(X.col(n), params.goal, referenceManagerPtr->getObstacles(),
-                                                                           referenceManagerPtr->getObstacleRadii(),
-                                                                           referenceManagerPtr->getObstacleMaxSpeeds())
-                                                       : params.goal);
-    if (detour.active() != detourWasActive) {
-      std::printf("  step %d: obstacle detour %s, OCP goal (%.2f, %.2f)\n", n, detour.active() ? "ON" : "OFF",
-                  referenceManagerPtr->getGoal()(0), referenceManagerPtr->getGoal()(1));
-    }
 
     if (verbose) {
       std::printf("Sim step: %d  time: %.2f\n", n, t);
@@ -147,7 +133,7 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
         const vector_t candidateState =
             lipMapScalar(X.col(n), candidateInput, params.omega(), params.mass, params.inertia);
         // Stricter than the reference, which only rejects insane steps: the successor must also land near the OCP's
-        // velocity limits, as OptiPessiMpc requires before publishing one (see saturatedStepUsable).
+        // velocity limits (see saturatedStepUsable).
         if (saturatedStepUsable(X.col(n), candidateInput, params)) {
           appliedInput = candidateInput;
           successorState = candidateState;

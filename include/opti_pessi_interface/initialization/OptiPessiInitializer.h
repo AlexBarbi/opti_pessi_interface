@@ -44,8 +44,7 @@ vector_t extractRobotState(const vector_t& augmentedState);
 vector_t extractRobotInput(const vector_t& augmentedInput);
 
 /** Nominal per-branch input at a knot: footholds under the next hips, centred CoP, preferred dt. */
-vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_t& robotState, int knotParity,
-                           const vector_t& initBias);
+vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_t& robotState, int knotParity);
 
 /** Seeds one branch's (a, b) hyperplane block from the current robot-to-obstacle direction. */
 void seedHyperplanes(vector_t& input, int hyperplaneOffset, const OptiPessiModelParameters& params, const vector_t& robotState,
@@ -59,9 +58,5 @@ vector_t augmentedLipStep(const OptiPessiModelParameters& params, const vector_t
  * States are SHIFTED, not re-integrated -- see the note in the implementation.
  */
 ocs2::PrimalSolution shiftPrimalSolution(const ocs2::PrimalSolution& solution, const vector_t& robotState);
-
-/** Cold-start guess: the initializer rolled out over the whole horizon. */
-ocs2::PrimalSolution rolloutGuess(const OptiPessiModelParameters& params, const OptiPessiReferenceManager& referenceManager,
-                                  const vector_t& robotState);
 
 }  // namespace opti_pessi
