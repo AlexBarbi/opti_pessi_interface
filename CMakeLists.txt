@@ -103,6 +103,21 @@ install(FILES python/plot_utils.py python/info_parser.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# ROS 2 node: goal and obstacle of the scenarios S1-S4 for OptiPessiController (legged_controllers)
+install(PROGRAMS scripts/opti_pessi_scenario.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+#############
+## Testing ##
+#############
+
+if(BUILD_TESTING)
+  # Where opti_pessi_scenario.py sends its obstacle: the controller, or the person of scenario_room.world
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_opti_pessi_scenario test/test_opti_pessi_scenario.py)
+endif()
+
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
