@@ -24,6 +24,8 @@ find_package(ocs2_robotic_tools REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/OptiPessiModelParameters.cpp
+  src/ObstacleSlots.cpp
+  src/OptiPessiReferenceManager.cpp
   src/LipKinematics.cpp
   src/OptiPessiInterface.cpp
   src/SolverBackend.cpp
@@ -116,6 +118,20 @@ if(BUILD_TESTING)
   # Where opti_pessi_scenario.py sends its obstacle: the controller, or the person of scenario_room.world
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_opti_pessi_scenario test/test_opti_pessi_scenario.py)
+
+  # Which OCP slot each perceived obstacle takes
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_obstacle_slots test/testObstacleSlots.cpp)
+  target_link_libraries(test_obstacle_slots ${PROJECT_NAME})
+  # Where a cold start puts the separating planes
+  ament_add_gtest(test_hyperplane_seed test/testHyperplaneSeed.cpp)
+  target_link_libraries(test_hyperplane_seed ${PROJECT_NAME})
+  # The random-walk obstacle of the closed-loop simulation
+  ament_add_gtest(test_obstacle_plant test/testObstaclePlant.cpp)
+  target_link_libraries(test_obstacle_plant ${PROJECT_NAME})
+  # A free slot constrains nothing (generates CppAD libraries in /tmp/ocs2)
+  ament_add_gtest(test_free_slots test/testFreeSlots.cpp TIMEOUT 300)
+  target_link_libraries(test_free_slots ${PROJECT_NAME})
 endif()
 
 ament_export_include_directories(include)

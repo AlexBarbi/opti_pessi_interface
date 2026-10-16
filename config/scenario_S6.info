@@ -1,0 +1,83 @@
+; Scenario S6 -- four obstacles moving at random in a corridor, in an OCP with four slots.
+; RandomObstacle of opti_pessi_acados' obstacle_manager.py: each heading takes a random walk of at most
+; 1 rad/s (uniform noise, plant.randomSeed), and at a wall of plant.randomBounds the obstacle bounces back.
+; Not in the Python reference (S1-S4 only). The start is task.info's initialState, (-0.8, -0.5).
+;
+; Laid out as opti_pessi_acados' main.py with seed 1234 draws it: goal c_target (10, 2), the corridor
+; corridor_bounds, and start, speed and initial heading of each obstacle from generate_random_obs() and
+; RandomObstacle.__init__ (x in [-1, 10], y in [-2, 2], speed in [0.1, 0.5]; all four start inside the corridor).
+; One radius serves all four: the Python draws 0.23, 0.34, 0.31 and 0.10 m, here ObstacleConfig.r_obs.
+; maxSpeed is ObstacleConfig.y_dot_max.
+
+goal
+{
+  (0,0)  10.0
+  (1,0)  2.0
+}
+
+obstacles
+{
+  numSlots      4
+  numObstacles  4
+  radius        0.2    ; r_obs [m], of every obstacle
+  maxSpeed      1.0    ; v_obs [m/s] -- the bound the pessimistic branch is robust against
+
+  ; Measured centres at t = 0, one row per obstacle.
+  positions
+  {
+    (0,0)  1.107
+    (0,1)  0.488
+    (1,0)  1.999
+    (1,1) -0.894
+    (2,0)  2.936
+    (2,1)  0.004
+    (3,0)  5.173
+    (3,1)  0.012
+  }
+}
+
+plant
+{
+  movement
+  {
+    [0]  random
+    [1]  random
+    [2]  random
+    [3]  random
+  }
+  speed
+  {
+    [0]  0.414
+    [1]  0.483
+    [2]  0.385
+    [3]  0.409
+  }
+  ; Initial heading of each obstacle (only its angle counts).
+  direction
+  {
+    (0,0) -0.1872
+    (0,1)  0.9823
+    (1,0) -0.7112
+    (1,1)  0.7030
+    (2,0)  0.6857
+    (2,1) -0.7279
+    (3,0) -0.7402
+    (3,1)  0.6724
+  }
+  ; Walls of the random movement: xMin, xMax, yMin, yMax.
+  randomBounds
+  {
+    (0,0)  1.0
+    (1,0)  9.0
+    (2,0) -1.0
+    (3,0)  1.0
+  }
+  randomSeed  1234
+}
+
+simulation
+{
+  simTime        30.0
+  goalTolerance  0.01
+  figName        "mpc_sim_6_"
+}

@@ -46,7 +46,8 @@ void dumpTrajectories(const OptiPessiModelParameters& params, const ClosedLoopRe
   saveNpy("x_quad_" + suffix, result.stateTrajectory);
   saveNpy("u_" + suffix, result.inputTrajectory);
   saveNpy3("y_obs_" + suffix, result.obstacleTrajectories);
-  std::cout << "Wrote x_quad_/u_/y_obs_" << suffix << "\n";
+  saveNpy("t_solve_" + suffix, matrix_t(result.solveTimes.transpose()));  // 1 x steps, wall-clock seconds per step
+  std::cout << "Wrote x_quad_/u_/y_obs_/t_solve_" << suffix << "\n";
 }
 
 void printUsage(const char* argv0) {
@@ -114,16 +115,12 @@ int main(int argc, char** argv) {
   try {
     OptiPessiInterface interface(optipessiFile, scenarioFile, libraryFolder, recompile, verbose);
     std::cout << "Built the Opti-Pessi optimal control problem: stateDim=" << interface.stateDim()
-              << " inputDim=" << interface.inputDim() << " numObstacles=" << interface.numObstacles() << "\n";
+              << " inputDim=" << interface.inputDim() << " obstacleSlots=" << interface.numObstacles() << "\n";
 
     interface.setupOptimalControlProblem(libraryFolder, recompile, backend);
 
-    ocs2::IpmMpc mpc(interface.mpcSettings(), interface.ipmSettings(), interface.getOptimalControlProblem(),
-                     interface.getInitializer());
-    mpc.getSolverPtr()->setReferenceManager(interface.getReferenceManagerPtr());
-
     std::cout << "\nSimulating Opti-Pessi MPC  [solver=" << toString(backend) << "]\n";
-    const ClosedLoopResult result = runClosedLoopSimulation(interface, mpc, verbose, realTimeIteration);
+    const ClosedLoopResult result = runClosedLoopSimulation(interface, verbose, realTimeIteration);
     const auto& params = interface.modelParameters();
 
     std::cout << "\nCollision:             " << (result.collision ? "yes" : "no") << "\n";
@@ -134,7 +131,7 @@ int main(int argc, char** argv) {
     scalar_t stddev = 0.0;
     scalar_t p95 = 0.0;
     solveTimeStatistics(result.solveTimes, mean, stddev, p95);
-    std::printf("Solve time [mean, std, p95]: %.4f %.4f %.4f s\n", mean, stddev, p95);
+    std::printf("Solve time [mean, std, p95]: %.2f %.2f %.2f ms\n", 1e3 * mean, 1e3 * stddev, 1e3 * p95);
     std::printf("Simulated time:        %.3f s\n", result.inputTrajectory.row(RobotU::DT).sum());
     std::printf("Steps on a relaxed keep-out (pessiScale < 1): %d\n", result.relaxedSteps);
     std::printf("Steps where every solve failed (fallback):    %d\n", result.fallbackSteps);

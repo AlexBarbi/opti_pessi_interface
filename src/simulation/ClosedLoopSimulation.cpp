@@ -5,6 +5,10 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <memory>
+#include <vector>
+
+#include <ocs2_ipm/IpmSolver.h>
 
 #include "opti_pessi_interface/LipKinematics.h"
 #include "opti_pessi_interface/initialization/OptiPessiInitializer.h"
@@ -16,6 +20,15 @@ namespace {
 
 vector_t worldHip(const vector_t& robotState, const vector_t& hipBody) {
   return robotState.head(2) + applyR(robotState(RobotX::TH), hipBody);
+}
+
+/** The plant's obstacles as perception reports them, each with the scenario's keep-out model. */
+std::vector<ObservedObstacle> observedObstacles(const ObstaclePlant& plant, const OptiPessiModelParameters& params) {
+  std::vector<ObservedObstacle> observed;
+  for (Eigen::Index j = 0; j < plant.positions.rows(); ++j) {
+    observed.push_back({plant.positions(j, 0), plant.positions(j, 1), params.obstacleRadius, params.obstacleMaxSpeed});
+  }
+  return observed;
 }
 
 // fallbackInput() (the capture-point stop) and saturateRobotInput() live in OptiPessiInterface.
@@ -43,10 +56,18 @@ bool hasDiverged(const vector_t& robotState, const vector_t& robotInput) {
 
 }  // namespace
 
-ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::IpmMpc& mpc, bool verbose,
-                                         bool realTimeIteration) {
+ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, bool verbose, bool realTimeIteration) {
   const OptiPessiModelParameters& params = interface.modelParameters();
   auto referenceManagerPtr = interface.getOptiPessiReferenceManagerPtr();
+
+  // One solver per OCP size (index numSlots - 1), as OptiPessiMpc.
+  std::vector<std::unique_ptr<ocs2::IpmSolver>> solvers;
+  for (int numSlots = 1; numSlots <= interface.numObstacles(); ++numSlots) {
+    solvers.push_back(std::make_unique<ocs2::IpmSolver>(interface.ipmSettings(), interface.getOptimalControlProblem(numSlots),
+                                                         interface.getInitializer(numSlots)));
+    solvers.back()->setReferenceManager(interface.getReferenceManagerPtr());
+  }
+  std::vector<int> warmStartObstacleIds;  // obstacle in each slot of warmStart's OCP
   const int maxSteps = 1 + static_cast<int>(std::ceil(params.simTime / params.dtMin));
 
   matrix_t X = matrix_t::Zero(RobotX::DIM, maxSteps + 1);
@@ -64,8 +85,8 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
   X.block(RobotX::P1X, 0, 2, 1) = worldHip(X.col(0), hipOf(params, Foot::RL));
 
   ObstaclePlant plant = makeObstaclePlant(params);
-  std::vector<matrix_t> obstacleTrajectories(static_cast<size_t>(params.numObstacles()), matrix_t::Zero(2, maxSteps + 1));
-  for (int j = 0; j < params.numObstacles(); ++j) {
+  std::vector<matrix_t> obstacleTrajectories(static_cast<size_t>(params.numPlantObstacles()), matrix_t::Zero(2, maxSteps + 1));
+  for (int j = 0; j < params.numPlantObstacles(); ++j) {
     obstacleTrajectories[static_cast<size_t>(j)](0, 0) = plant.positions(j, 0);
     obstacleTrajectories[static_cast<size_t>(j)](1, 0) = plant.positions(j, 1);
   }
@@ -93,17 +114,29 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
 
   while (t < params.simTime && goalDistanceSq(n) > goalToleranceSq) {
     referenceManagerPtr->setGaitOffset(n);
-    referenceManagerPtr->setObstacles(plant.positions);
+    referenceManagerPtr->setObservedObstacles(observedObstacles(plant, params), X.col(n).head(2));
 
     if (verbose) {
       std::printf("Sim step: %d  time: %.2f\n", n, t);
       std::fflush(stdout);
     }
 
+    // The OCP with one slot per obstacle present. When other obstacles hold the slots than in the warm start, the warm
+    // start is remapped to them and the solver starts its slacks and duals afresh.
+    const int numSlots = interface.ocpSlots(referenceManagerPtr->numActiveObstacles());
+    const std::vector<int> obstacleIds = referenceManagerPtr->getObstacleIds(numSlots);
+    ocs2::IpmSolver& solver = *solvers[static_cast<size_t>(numSlots - 1)];
+    if (haveWarmStart && obstacleIds != warmStartObstacleIds) {
+      warmStart = remapObstacleSlots(warmStart, warmStartObstacleIds, obstacleIds, interface.modelParameters(numSlots),
+                                     *referenceManagerPtr);
+      solver.reset();
+    }
+
     const auto tic = std::chrono::steady_clock::now();
     scalar_t acceptedScale = 1.0;
-    const SolveOutcome outcome = interface.solveControlStep(mpc, X.col(n), haveWarmStart ? &warmStart : nullptr,
-                                                            realTimeIteration, verbose, acceptedScale);
+    const SolveOutcome outcome =
+        solveWithRetries(solver, interface.getOptimalControlProblem(numSlots), interface.modelParameters(numSlots), *referenceManagerPtr,
+                         X.col(n), haveWarmStart ? &warmStart : nullptr, realTimeIteration, verbose, acceptedScale);
     const auto toc = std::chrono::steady_clock::now();
     solveTimes(n) = std::chrono::duration<scalar_t>(toc - tic).count();
     appliedPessiScale(n) = outcome.ok ? acceptedScale : 0.0;
@@ -159,20 +192,23 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
         std::printf("\tCONSTRAINT VIOLATION at step %d (fallback applied): v=(%.2f,%.2f) dtheta=%.2f\n", n,
                     successorState(RobotX::DCX), successorState(RobotX::DCY), successorState(RobotX::DTH));
       }
-      stepObstacles(plant, params, X.col(n).head(2), appliedInput(RobotU::DT), n);
-      if (params.numObstacles() > 0) {
-        vector_t obstacle(2);
-        obstacle << plant.positions(0, 0), plant.positions(0, 1);
-        collision = hipsAndFeetCollide(successorState.head(2), successorState(RobotX::TH), successorState.tail(4), obstacle, params,
-                                       params.obstacleRadius);
+    }
+    stepObstacles(plant, params, X.col(n).head(2), appliedInput(RobotU::DT), n);
+
+    // Every step and every obstacle: a solve that met its own constraints still plans against the measured centre, not
+    // against where the obstacle has walked to. (Until 2026-10-15 only failed steps and obstacle 0 were checked.)
+    for (int j = 0; j < params.numPlantObstacles() && !collision; ++j) {
+      const vector_t obstacle = plant.positions.row(j).transpose();
+      if (hipsAndFeetCollide(successorState.head(2), successorState(RobotX::TH), successorState.tail(4), obstacle, params,
+                             params.obstacleRadius)) {
+        collision = true;
+        std::printf("\tCOLLISION at step %d with obstacle %d at (%.2f, %.2f)\n", n, j, obstacle(0), obstacle(1));
       }
-    } else {
-      stepObstacles(plant, params, X.col(n).head(2), appliedInput(RobotU::DT), n);
     }
 
     X.col(n + 1) = successorState;
     U.col(n) = appliedInput;
-    for (int j = 0; j < params.numObstacles(); ++j) {
+    for (int j = 0; j < params.numPlantObstacles(); ++j) {
       obstacleTrajectories[static_cast<size_t>(j)](0, n + 1) = plant.positions(j, 0);
       obstacleTrajectories[static_cast<size_t>(j)](1, n + 1) = plant.positions(j, 1);
     }
@@ -192,6 +228,7 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
         outcome.planTrustworthy() || (realTimeIteration && !outcome.solution.stateTrajectory_.empty());
     if (keepWarmStart) {
       warmStart = shiftPrimalSolution(outcome.solution, successorState);
+      warmStartObstacleIds = obstacleIds;
       haveWarmStart = true;
     } else {
       haveWarmStart = false;
@@ -212,8 +249,8 @@ ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::Ip
   result.inputTrajectory = U.leftCols(n);
   result.stanceHip0 = hip0.leftCols(n);
   result.stanceHip1 = hip1.leftCols(n);
-  result.obstacleTrajectories.resize(static_cast<size_t>(params.numObstacles()));
-  for (int j = 0; j < params.numObstacles(); ++j) {
+  result.obstacleTrajectories.resize(static_cast<size_t>(params.numPlantObstacles()));
+  for (int j = 0; j < params.numPlantObstacles(); ++j) {
     result.obstacleTrajectories[static_cast<size_t>(j)] = obstacleTrajectories[static_cast<size_t>(j)].leftCols(n + 1);
   }
   result.solveTimes = solveTimes.head(n);

@@ -10,6 +10,7 @@
 #include <ocs2_mpc/MPC_BASE.h>
 #include <ocs2_oc/oc_problem/OptimalControlProblem.h>
 
+#include "opti_pessi_interface/OptiPessiInterface.h"
 #include "opti_pessi_interface/OptiPessiModelParameters.h"
 #include "opti_pessi_interface/OptiPessiReferenceManager.h"
 
@@ -28,17 +29,25 @@ namespace opti_pessi {
  * "The solver fails" means it threw, or returned no complete, finite trajectory. When the cold start fails too there is
  * nothing to publish and the previous plan stays. The first solve after reset() has no previous solution and starts cold.
  * The MRT buffer only feeds visualization.
+ *
+ * Every solve uses the OCP with one slot per obstacle in the reference manager (OptiPessiInterface::ocpSlots()), each
+ * size with its own solver: a slot costs as much free as taken. When the obstacles in the slots change (one more, one
+ * less, one replaced), the warm start keeps every remaining obstacle's planes, moved to its new slot, and seeds those of
+ * a new one (remapObstacleSlots()); the solver then starts its slacks and duals afresh.
  */
 class OptiPessiMpc final : public ocs2::MPC_BASE {
  public:
-  OptiPessiMpc(ocs2::mpc::Settings mpcSettings, ocs2::ipm::Settings settings, const ocs2::OptimalControlProblem& optimalControlProblem,
-               const ocs2::Initializer& initializer, std::shared_ptr<OptiPessiReferenceManager> referenceManagerPtr,
-               OptiPessiModelParameters params);
+  /** Solvers for every OCP of `interface`, which must outlive this object. */
+  explicit OptiPessiMpc(const OptiPessiInterface& interface);
 
   ~OptiPessiMpc() override = default;
 
-  ocs2::IpmSolver* getSolverPtr() override { return solverPtr_.get(); }
-  const ocs2::IpmSolver* getSolverPtr() const override { return solverPtr_.get(); }
+  /** The solver of the latest solve. */
+  ocs2::IpmSolver* getSolverPtr() override { return solvers_[activeSolver_].get(); }
+  const ocs2::IpmSolver* getSolverPtr() const override { return solvers_[activeSolver_].get(); }
+
+  /** Binds every solver to `referenceManagerPtr` (they all read the one reference manager of the interface). */
+  void setReferenceManager(std::shared_ptr<ocs2::ReferenceManagerInterface> referenceManagerPtr);
 
   void reset() override;
 
@@ -64,6 +73,8 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
   struct SolveStatistics {
     int gaitOffset = 0;
     const char* warmStart = "none";      // "cold", "shifted" (new phase), "same phase", or "cold retry" after a failed warm start
+    int obstacleSlots = 0;               // slots of the OCP solved
+    bool obstaclesChanged = false;       // other obstacles in the slots than in the warm start: its planes were remapped
     bool solved = false;                 // the solver returned a trajectory and it was published
     size_t numIterations = 0;            // of the last run
     ocs2::PerformanceIndex performance;  // the solver's own figures for the last run
@@ -79,6 +90,7 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
     size_t shifted = 0;           // warm-started from the previous phase's solution, shifted
     size_t cold = 0;              // started cold: no previous solution
     size_t coldRetries = 0;       // cold starts after the solver failed on the warm start
+    size_t obstacleChanges = 0;   // warm starts remapped to other obstacles in the slots
     size_t unsolved = 0;          // the solver failed on every start: nothing published
     size_t iterations = 0;        // of the last run of each solve
     size_t atIterationCap = 0;    // solves whose last run stopped at ipmIteration
@@ -94,13 +106,19 @@ class OptiPessiMpc final : public ocs2::MPC_BASE {
   void calculateController(scalar_t initTime, const vector_t& initState, scalar_t finalTime) override;
 
  private:
-  /** One run of the solver from `guess`, or cold without one. False if the solver failed (see the class comment). */
-  bool solve(const vector_t& robotState, const ocs2::PrimalSolution* guess, ocs2::PrimalSolution& solution);
+  /**
+   * One run of the active solver from `guess`, or cold without one; `freshDuals` restarts its slacks and duals.
+   * False if the solver failed (see the class comment).
+   */
+  bool solve(const vector_t& robotState, const ocs2::PrimalSolution* guess, bool freshDuals, ocs2::PrimalSolution& solution);
 
-  std::unique_ptr<ocs2::IpmSolver> solverPtr_;
+  const OptiPessiInterface& interface_;
+  std::vector<std::unique_ptr<ocs2::IpmSolver>> solvers_;  // index numSlots - 1
+  size_t activeSolver_ = 0;            // solver of the latest solve
   std::shared_ptr<OptiPessiReferenceManager> referenceManagerPtr_;
   OptiPessiModelParameters params_;
   ocs2::PrimalSolution lastSolution_;  // last solution published, the next warm start
+  std::vector<int> lastObstacleIds_;   // obstacle in each slot of lastSolution_'s OCP
   bool hasSolution_ = false;
   bool published_ = false;             // the latest solve was published, see run()
   int lastGaitOffset_ = 0;             // phase lastSolution_ was solved for

@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <ocs2_core/Types.h>
 #include <ocs2_core/initialization/Initializer.h>
@@ -19,7 +20,6 @@
 #include "opti_pessi_interface/definitions.h"
 
 namespace ocs2 {
-class IpmMpc;
 class IpmSolver;
 }  // namespace ocs2
 
@@ -127,8 +127,20 @@ class OptiPessiInterface : public ocs2::RobotInterface {
    */
   void setRobotModel(scalar_t mass, scalar_t inertia);
 
-  const ocs2::OptimalControlProblem& getOptimalControlProblem() const override { return *problemPtr_; }
-  const ocs2::Initializer& getInitializer() const override { return *initializerPtr_; }
+  /**
+   * OCP and initializer with `numSlots` obstacle slots, 1..numObstacles(); without an argument the largest. Each solve
+   * takes the one with ocpSlots() slots: a slot costs as much free as taken.
+   */
+  const ocs2::OptimalControlProblem& getOptimalControlProblem(int numSlots) const;
+  const ocs2::Initializer& getInitializer(int numSlots) const;
+  const ocs2::OptimalControlProblem& getOptimalControlProblem() const override { return *problems_.back(); }
+  const ocs2::Initializer& getInitializer() const override { return *initializers_.back(); }
+
+  /** modelParameters() as the OCP with `numSlots` slots was built from (params.numSlots = numSlots). */
+  const OptiPessiModelParameters& modelParameters(int numSlots) const;
+
+  /** Slots of the OCP to solve with `numActiveObstacles` obstacles in the reference manager: one each, at least one. */
+  int ocpSlots(int numActiveObstacles) const;
   std::shared_ptr<ocs2::ReferenceManagerInterface> getReferenceManagerPtr() const override { return referenceManagerPtr_; }
 
   /** Typed accessor, needed to push the goal / obstacles / gait parity in the closed loop. */
@@ -144,28 +156,19 @@ class OptiPessiInterface : public ocs2::RobotInterface {
 
   const OptiPessiModelParameters& modelParameters() const { return params_; }
 
+  /** Most obstacle slots (scenario obstacles.numSlots): the largest OCP, and the obstacles tracked at once. */
   int numObstacles() const { return params_.numObstacles(); }
   int stateDim() const { return params_.stateDim(); }
+  /** Input dimension of the largest OCP. */
   int inputDim() const { return params_.inputDim(); }
 
   /** Horizon end, in the knot-index time convention of definitions.h. */
   scalar_t finalTime() const { return static_cast<scalar_t>(params_.N); }
 
-  /**
-   * Every solve attempt of one control step, from the robot state at that step: the nominal problem,
-   * a cold retry and the keep-out continuation. Leaves the reference manager at the nominal keep-out.
-   * Gait offset, obstacles and goal must already be pushed to the reference manager.
-   *
-   * @param [in] mpc: built from this interface's problem and bound to its reference manager.
-   * @param [in] robotState: measured 10-dof robot state (NOT the augmented state).
-   * @param [in] warmStart: shifted previous solution, or nullptr to cold-start the nominal solve.
-   * @param [in] realTimeIteration: skip the cold retry and the continuation (one solve per step).
-   * @param [out] acceptedScale: keep-out scale of the returned outcome (1.0 unless a relaxed solve won).
-   */
-  SolveOutcome solveControlStep(ocs2::IpmMpc& mpc, const vector_t& robotState, const ocs2::PrimalSolution* warmStart,
-                                bool realTimeIteration, bool verbose, scalar_t& acceptedScale);
-
  private:
+  std::unique_ptr<ocs2::OptimalControlProblem> makeProblem(const OptiPessiModelParameters& params, const std::string& libraryFolder,
+                                                           bool recompile) const;
+
   OptiPessiModelParameters params_;
 
   ocs2::ipm::Settings ipmSettings_;
@@ -179,10 +182,12 @@ class OptiPessiInterface : public ocs2::RobotInterface {
 
   SolverBackend backend_ = SolverBackend::Ipm;
 
-  std::unique_ptr<ocs2::OptimalControlProblem> problemPtr_;
+  // Index numSlots - 1: the OCP with numSlots obstacle slots, its initializer and parameters.
+  std::vector<std::unique_ptr<ocs2::OptimalControlProblem>> problems_;
+  std::vector<std::unique_ptr<ocs2::Initializer>> initializers_;
+  std::vector<OptiPessiModelParameters> slotParams_;
   std::shared_ptr<OptiPessiReferenceManager> referenceManagerPtr_;
   std::unique_ptr<ocs2::RolloutBase> rolloutPtr_;
-  std::unique_ptr<ocs2::Initializer> initializerPtr_;
 };
 
 }  // namespace opti_pessi

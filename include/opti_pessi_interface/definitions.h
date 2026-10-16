@@ -137,14 +137,25 @@ struct Hyperplane {
  * OptiPessiReferenceManager::getObstacleParameters()). Radius and speed bound are parameters, not
  * constants compiled into the CppAD libraries, so obstacles of different types can share one OCP and
  * swap slots between solves.
+ *
+ * ACTIVE is 1 for a slot that holds an obstacle and 0 for a free one. A free slot's rows are the constant 1: a far
+ * "parked" obstacle instead still pushed the robot away from its parking spot through the barrier on the hip rows
+ * whenever the solve stopped short of convergence (closed loop: 0.17 m short of the goal with 4 slots).
  */
 struct ObstacleP {
   static constexpr int X = 0;
   static constexpr int Y = 1;
   static constexpr int RADIUS = 2;     // r_obs [m]
   static constexpr int MAX_SPEED = 3;  // v_obs [m/s], the bound assumed by the pessimistic branch
-  static constexpr int DIM = 4;
+  static constexpr int ACTIVE = 4;     // 1 obstacle in the slot, 0 free slot
+  static constexpr int DIM = 5;
 };
+
+/** Row of an obstacle slot: the row itself in a slot with an obstacle, the constant 1 in a free one. */
+template <typename Scalar>
+Scalar slotRow(const Scalar& active, const Scalar& row) {
+  return active * row + (Scalar(1) - active);
+}
 
 /** Augmented state: optimistic branch || pessimistic branch || elapsed-time clock. */
 constexpr int AUG_STATE_DIM = 2 * RobotX::DIM + 1;

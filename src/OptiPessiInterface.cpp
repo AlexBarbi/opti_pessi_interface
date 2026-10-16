@@ -259,40 +259,72 @@ OptiPessiInterface::OptiPessiInterface(const std::string& optipessiFile, const s
 }
 
 void OptiPessiInterface::setupOptimalControlProblem(const std::string& libraryFolder, bool recompile, SolverBackend backend) {
-
   backend_ = backend;
   setupReferenceManager(params_);
 
-  problemPtr_ = std::make_unique<ocs2::OptimalControlProblem>();
+  // One OCP per obstacle count: a slot costs as much free as taken (its planes are input variables, its rows are
+  // differentiated at every knot), so each solve uses the OCP with one slot per obstacle present. Measured in the closed
+  // loop with one obstacle: 9 ms a solve with 1 slot, 36 ms with 4. Each size has its own CppAD libraries.
+  problems_.clear();
+  initializers_.clear();
+  slotParams_.clear();
+  for (int numSlots = 1; numSlots <= params_.numObstacles(); ++numSlots) {
+    OptiPessiModelParameters params = params_;
+    params.numSlots = numSlots;
+    problems_.push_back(makeProblem(params, libraryFolder + "/slots" + std::to_string(numSlots), recompile));
+    initializers_.push_back(std::make_unique<OptiPessiInitializer>(params, *referenceManagerPtr_));
+    slotParams_.push_back(std::move(params));
+  }
+
+  // Rollout
+  rolloutPtr_ = std::make_unique<ocs2::TimeTriggeredRollout>(*problems_.back()->dynamicsPtr, rolloutSettings_);
+}
+
+const ocs2::OptimalControlProblem& OptiPessiInterface::getOptimalControlProblem(int numSlots) const {
+  return *problems_.at(static_cast<size_t>(numSlots - 1));
+}
+
+const ocs2::Initializer& OptiPessiInterface::getInitializer(int numSlots) const {
+  return *initializers_.at(static_cast<size_t>(numSlots - 1));
+}
+
+const OptiPessiModelParameters& OptiPessiInterface::modelParameters(int numSlots) const {
+  return slotParams_.at(static_cast<size_t>(numSlots - 1));
+}
+
+int OptiPessiInterface::ocpSlots(int numActiveObstacles) const {
+  return std::min(std::max(numActiveObstacles, 1), params_.numObstacles());
+}
+
+std::unique_ptr<ocs2::OptimalControlProblem> OptiPessiInterface::makeProblem(const OptiPessiModelParameters& params,
+                                                                           const std::string& libraryFolder, bool recompile) const {
+  auto problemPtr = std::make_unique<ocs2::OptimalControlProblem>();
 
   // Dynamics: two LIP branches plus the elapsed-time clock.
-  problemPtr_->dynamicsPtr = std::make_unique<OptiPessiDynamicsAD>(params_, libraryFolder, recompile);
+  problemPtr->dynamicsPtr = std::make_unique<OptiPessiDynamicsAD>(params, libraryFolder, recompile);
 
   // Cost: optimistic branch only.
-  problemPtr_->costPtr->add("stageCost",
-                            std::make_unique<OptiPessiStageCost>(params_, *referenceManagerPtr_, libraryFolder, recompile));
-  problemPtr_->finalCostPtr->add("finalCost",
-                                 std::make_unique<OptiPessiFinalCost>(params_, *referenceManagerPtr_, libraryFolder, recompile));
+  problemPtr->costPtr->add("stageCost", std::make_unique<OptiPessiStageCost>(params, *referenceManagerPtr_, libraryFolder, recompile));
+  problemPtr->finalCostPtr->add("finalCost",
+                                std::make_unique<OptiPessiFinalCost>(params, *referenceManagerPtr_, libraryFolder, recompile));
 
   // Hard inequalities, both branches. Split so the input bounds and friction cones stay active at
   // knot 0 while the path constraints (which knot 0 cannot influence) start at knot 1.
-  problemPtr_->inequalityConstraintPtr->add("inputBounds",
-                                            std::make_unique<InputBoundsConstraint>(params_, libraryFolder, recompile));
-  problemPtr_->inequalityConstraintPtr->add(
-      "pathConstraints", std::make_unique<StageInequalityConstraint>(params_, *referenceManagerPtr_, libraryFolder, recompile));
+  problemPtr->inequalityConstraintPtr->add("inputBounds", std::make_unique<InputBoundsConstraint>(params, libraryFolder, recompile));
+  problemPtr->inequalityConstraintPtr->add(
+      "pathConstraints", std::make_unique<StageInequalityConstraint>(params, *referenceManagerPtr_, libraryFolder, recompile));
 
   // The hyperplane collision constraint cannot reach the final knot (no input there), so the far end
   // of the horizon gets a conservative circular keep-out instead.
-  problemPtr_->finalInequalityConstraintPtr->add(
-      "terminalObstacle", std::make_unique<TerminalObstacleConstraint>(params_, *referenceManagerPtr_, libraryFolder, recompile));
+  problemPtr->finalInequalityConstraintPtr->add(
+      "terminalObstacle", std::make_unique<TerminalObstacleConstraint>(params, *referenceManagerPtr_, libraryFolder, recompile));
 
   // Equalities: terminal CoP equilibrium and non-anticipativity. There is deliberately no
   // ||a|| = 1 constraint -- the hyperplane normals are parameterized by angle, so it holds
   // identically (see definitions.h). Both backends carry these as hard equalities.
-  problemPtr_->equalityConstraintPtr->add("terminalCop",
-                                          std::make_unique<TerminalCopConstraint>(params_, libraryFolder, recompile));
-  problemPtr_->equalityConstraintPtr->add("firstInputConsensus",
-                                          std::make_unique<FirstInputConsensusConstraint>(params_, libraryFolder, recompile));
+  problemPtr->equalityConstraintPtr->add("terminalCop", std::make_unique<TerminalCopConstraint>(params, libraryFolder, recompile));
+  problemPtr->equalityConstraintPtr->add("firstInputConsensus",
+                                         std::make_unique<FirstInputConsensusConstraint>(params, libraryFolder, recompile));
 
   // SQP has no inequality machinery: ocs2::SqpSolver assembles its QP from dynamics, cost and
   // state-input equalities only, and silently discards every inequality row it computed. So under
@@ -308,27 +340,22 @@ void OptiPessiInterface::setupOptimalControlProblem(const std::string& libraryFo
     // recompile = false: these wrap the same CppAD models under the same library names, which the
     // hard copies above have just generated. Regenerating them a second time would only cost build
     // time.
-    problemPtr_->softConstraintPtr->add(
+    problemPtr->softConstraintPtr->add(
         "inputBoundsSoft",
-        std::make_unique<ocs2::StateInputSoftConstraint>(std::make_unique<InputBoundsConstraint>(params_, libraryFolder, false),
+        std::make_unique<ocs2::StateInputSoftConstraint>(std::make_unique<InputBoundsConstraint>(params, libraryFolder, false),
                                                          makeRelaxedBarrier(barrierMu_, barrierDelta_)));
-    problemPtr_->softConstraintPtr->add(
+    problemPtr->softConstraintPtr->add(
         "pathConstraintsSoft",
         std::make_unique<ocs2::StateInputSoftConstraint>(
-            std::make_unique<StageInequalityConstraint>(params_, *referenceManagerPtr_, libraryFolder, false),
+            std::make_unique<StageInequalityConstraint>(params, *referenceManagerPtr_, libraryFolder, false),
             makeRelaxedBarrier(barrierMu_, barrierDelta_)));
-    problemPtr_->finalSoftConstraintPtr->add(
+    problemPtr->finalSoftConstraintPtr->add(
         "terminalObstacleSoft",
         std::make_unique<ocs2::StateSoftConstraint>(
-            std::make_unique<TerminalObstacleConstraint>(params_, *referenceManagerPtr_, libraryFolder, false),
+            std::make_unique<TerminalObstacleConstraint>(params, *referenceManagerPtr_, libraryFolder, false),
             makeRelaxedBarrier(barrierMu_, barrierDelta_)));
   }
-
-  // Rollout
-  rolloutPtr_ = std::make_unique<ocs2::TimeTriggeredRollout>(*problemPtr_->dynamicsPtr, rolloutSettings_);
-
-  // Initialization
-  initializerPtr_ = std::make_unique<OptiPessiInitializer>(params_, *referenceManagerPtr_);
+  return problemPtr;
 }
 
 // Note the parameter is deliberately named `params`, not `params_`: a parameter shadowing the
@@ -348,7 +375,7 @@ void OptiPessiInterface::setupReferenceManager(const OptiPessiModelParameters& p
 }
 
 void OptiPessiInterface::setRobotModel(scalar_t mass, scalar_t inertia) {
-  if (problemPtr_ != nullptr) {
+  if (!problems_.empty()) {
     throw std::logic_error("[OptiPessiInterface] setRobotModel() must be called before setupOptimalControlProblem().");
   }
   params_.mass = mass;
@@ -384,13 +411,6 @@ bool SolveOutcome::dynamicsConsistent() const {
 
 bool SolveOutcome::planTrustworthy() const {
   return ok && dynamicsConsistent() && horizonViolation < kPlanViolationTolerance;
-}
-
-SolveOutcome OptiPessiInterface::solveControlStep(ocs2::IpmMpc& mpc, const vector_t& robotState,
-                                                  const ocs2::PrimalSolution* warmStart, bool realTimeIteration,
-                                                  bool verbose, scalar_t& acceptedScale) {
-  return solveWithRetries(*mpc.getSolverPtr(), *problemPtr_, params_, *referenceManagerPtr_, robotState, warmStart, realTimeIteration,
-                          verbose, acceptedScale);
 }
 
 SolveOutcome solveWithRetries(ocs2::IpmSolver& solver, const ocs2::OptimalControlProblem& problem, const OptiPessiModelParameters& params,

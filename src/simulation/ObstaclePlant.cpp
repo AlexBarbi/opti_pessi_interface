@@ -17,13 +17,19 @@ ObstaclePlant makeObstaclePlant(const OptiPessiModelParameters& params) {
   ObstaclePlant plant;
   plant.positions = params.obstaclePositions;
   plant.direction = params.obstacleDir;
-  plant.radius = vector_t::Zero(params.numObstacles());
-  plant.phase = vector_t::Zero(params.numObstacles());
+  plant.radius = vector_t::Zero(params.numPlantObstacles());
+  plant.phase = vector_t::Zero(params.numPlantObstacles());
+  plant.circleInitialized.assign(static_cast<size_t>(params.numPlantObstacles()), false);
+  plant.heading = vector_t::Zero(params.numPlantObstacles());
+  for (int j = 0; j < params.numPlantObstacles(); ++j) {
+    plant.heading(j) = std::atan2(params.obstacleDir(j, 1), params.obstacleDir(j, 0));
+  }
+  plant.rng.seed(params.randomSeed);
   return plant;
 }
 
 void stepObstacles(ObstaclePlant& plant, const OptiPessiModelParameters& params, const vector_t& robotCom, scalar_t dt, int step) {
-  for (int j = 0; j < params.numObstacles(); ++j) {
+  for (int j = 0; j < params.numPlantObstacles(); ++j) {
     const scalar_t speed = params.obstacleSpeed(j);
     switch (params.obstacleMovement[static_cast<size_t>(j)]) {
       case ObstacleMovement::Straight: {
@@ -44,12 +50,12 @@ void stepObstacles(ObstaclePlant& plant, const OptiPessiModelParameters& params,
         break;
       }
       case ObstacleMovement::Circle: {
-        if (!plant.circleInitialized) {
+        if (!plant.circleInitialized[static_cast<size_t>(j)]) {
           const scalar_t dx = plant.positions(j, 0) - params.goal(0);
           const scalar_t dy = plant.positions(j, 1) - params.goal(1);
           plant.radius(j) = std::sqrt(dx * dx + dy * dy);
           plant.phase(j) = std::atan2(dy, dx);
-          plant.circleInitialized = true;
+          plant.circleInitialized[static_cast<size_t>(j)] = true;
         }
         plant.phase(j) += (speed / plant.radius(j)) * dt;
         plant.positions(j, 0) = params.goal(0) + plant.radius(j) * std::cos(plant.phase(j));
@@ -66,6 +72,30 @@ void stepObstacles(ObstaclePlant& plant, const OptiPessiModelParameters& params,
         }
         plant.positions(j, 0) += v(0) * speed * dt;
         plant.positions(j, 1) += v(1) * speed * dt;
+        break;
+      }
+      case ObstacleMovement::Random: {
+        // RandomObstacle of opti_pessi_acados' obstacle_manager.py: the heading takes a random walk of at
+        // most 1 rad/s, and at a wall of randomBounds the obstacle bounces back, clipped onto the wall.
+        std::uniform_real_distribution<scalar_t> noise(-1.0, 1.0);
+        plant.heading(j) += noise(plant.rng) * dt;
+        scalar_t vx = speed * std::cos(plant.heading(j));
+        scalar_t vy = speed * std::sin(plant.heading(j));
+        scalar_t x = plant.positions(j, 0) + vx * dt;
+        scalar_t y = plant.positions(j, 1) + vy * dt;
+        const vector_t& bounds = params.randomBounds;  // xMin, xMax, yMin, yMax
+        if (x < bounds(0) || x > bounds(1)) {
+          vx = -vx;
+          plant.heading(j) = std::atan2(vy, vx);
+          x = std::clamp(x, bounds(0), bounds(1));
+        }
+        if (y < bounds(2) || y > bounds(3)) {
+          vy = -vy;
+          plant.heading(j) = std::atan2(vy, vx);
+          y = std::clamp(y, bounds(2), bounds(3));
+        }
+        plant.positions(j, 0) = x;
+        plant.positions(j, 1) = y;
         break;
       }
     }

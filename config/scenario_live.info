@@ -1,0 +1,53 @@
+; Scenario of the controller (OptiPessiController), the default scenarioFile of
+; legged_controllers/launch/load_optipessicontroller_launch.xml.
+; Goal and obstacles come from /opti_pessi/goal and /opti_pessi/obstacles; what the controller takes from
+; here is the number of obstacle slots of the OCP (obstacles.numSlots) and simulation.goalTolerance.
+; obstacles.numSlots sizes the input and the parameters of the CppAD libraries: the controller keeps one
+; library folder per slot count (lib/m<mass>_I<inertia>_o<slots>), generated on first use.
+;
+; The rest is for the standalone closed loop (opti_pessi_interface_mpc), which runs S1 here -- its static
+; obstacle in a 4-slot OCP, 3 slots free -- so the controller's OCP can be tried offline.
+
+goal
+{
+  (0,0)  1.0
+  (1,0)  0.2
+}
+
+obstacles
+{
+  numSlots      4   ; obstacle slots: people_perception obstacle_adapter.yaml max_obstacles publishes as many
+  numObstacles  1   ; scripted obstacles of the closed loop's plant (S1)
+  radius        0.2 ; of the plant's obstacles; the controller takes each obstacle's radius and speed bound
+  maxSpeed      1.0 ; from obstacleTypes in task.info
+
+  positions
+  {
+    (0,0)  0.1
+    (0,1)  1.0
+  }
+}
+
+plant
+{
+  movement
+  {
+    [0]  straight
+  }
+  speed
+  {
+    [0]  0.0
+  }
+  direction
+  {
+    (0,0)  0.0
+    (0,1) -1.0
+  }
+}
+
+simulation
+{
+  simTime        20.0
+  goalTolerance  0.01
+  figName        "mpc_sim_live_"
+}

@@ -57,8 +57,11 @@ ObstacleMovement obstacleMovementFromString(const std::string& name) {
   if (lower == "antagonist") {
     return ObstacleMovement::Antagonist;
   }
+  if (lower == "random") {
+    return ObstacleMovement::Random;
+  }
   throw std::runtime_error("[OptiPessiModelParameters] Unknown obstacle movement \"" + name +
-                           "\". Expected one of: straight, patrol, circle, antagonist.");
+                           "\". Expected one of: straight, patrol, circle, antagonist, random.");
 }
 
 std::string toString(ObstacleMovement movement) {
@@ -71,6 +74,8 @@ std::string toString(ObstacleMovement movement) {
       return "circle";
     case ObstacleMovement::Antagonist:
       return "antagonist";
+    case ObstacleMovement::Random:
+      return "random";
   }
   return "unknown";
 }
@@ -156,6 +161,13 @@ OptiPessiModelParameters loadOptiPessiModelParameters(const std::string& taskFil
   if (numObstacles < 1) {
     throw std::runtime_error("[OptiPessiModelParameters] obstacles.numObstacles must be at least 1.");
   }
+  p.numSlots = numObstacles;
+  if (scenario.get_optional<int>("obstacles.numSlots")) {
+    ocs2::loadData::loadPtreeValue(scenario, p.numSlots, "obstacles.numSlots", verbose);
+  }
+  if (p.numSlots < 1) {
+    throw std::runtime_error("[OptiPessiModelParameters] obstacles.numSlots must be at least 1.");
+  }
   ocs2::loadData::loadPtreeValue(scenario, p.obstacleRadius, "obstacles.radius", verbose);
   ocs2::loadData::loadPtreeValue(scenario, p.obstacleMaxSpeed, "obstacles.maxSpeed", verbose);
 
@@ -189,6 +201,31 @@ OptiPessiModelParameters loadOptiPessiModelParameters(const std::string& taskFil
   ocs2::loadData::loadEigenMatrix(scenarioFile, "plant.direction", p.obstacleDir);
   if (verbose) {
     std::cerr << " #### 'plant.direction':\n" << p.obstacleDir << "\n";
+  }
+
+  // Only the random movement has walls and a seed.
+  if (std::find(p.obstacleMovement.begin(), p.obstacleMovement.end(), ObstacleMovement::Random) != p.obstacleMovement.end()) {
+    p.randomBounds.setZero(4);
+    ocs2::loadData::loadEigenMatrix(scenarioFile, "plant.randomBounds", p.randomBounds);
+    int seed = 0;
+    ocs2::loadData::loadPtreeValue(scenario, seed, "plant.randomSeed", verbose);
+    p.randomSeed = static_cast<unsigned int>(seed);
+    if (verbose) {
+      std::cerr << " #### 'plant.randomBounds': " << p.randomBounds.transpose() << "\n";
+    }
+    if (!(p.randomBounds(0) < p.randomBounds(1) && p.randomBounds(2) < p.randomBounds(3))) {
+      throw std::runtime_error("[OptiPessiModelParameters] plant.randomBounds must be (xMin, xMax, yMin, yMax) with xMin < xMax "
+                               "and yMin < yMax.");
+    }
+    // A random obstacle starting outside its walls would be clipped onto them at once, faster than its speed.
+    for (int j = 0; j < numObstacles; ++j) {
+      const bool inside = p.obstaclePositions(j, 0) >= p.randomBounds(0) && p.obstaclePositions(j, 0) <= p.randomBounds(1) &&
+                          p.obstaclePositions(j, 1) >= p.randomBounds(2) && p.obstaclePositions(j, 1) <= p.randomBounds(3);
+      if (p.obstacleMovement[static_cast<size_t>(j)] == ObstacleMovement::Random && !inside) {
+        throw std::runtime_error("[OptiPessiModelParameters] Random obstacle " + std::to_string(j) +
+                                 " starts outside plant.randomBounds.");
+      }
+    }
   }
 
   ocs2::loadData::loadPtreeValue(scenario, p.simTime, "simulation.simTime", verbose);

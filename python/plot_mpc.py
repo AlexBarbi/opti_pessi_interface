@@ -2,9 +2,12 @@
 """Plot the .npy dumps produced by opti_pessi_interface_mpc.
 
 Reads the same config/*.info files the C++ node reads, so there is a single source of truth for
-the goal, the start pose and the horizon. Run it from the directory holding the .npy dumps:
+the goal, the start pose and the horizon. Run it from ~/RaNAV, where the node wrote the .npy dumps:
 
-    plot_mpc.py <taskFile> <scenarioFile>
+    plot_mpc.py <scenario>
+
+<scenario> is 1-5 or S1-S5 (config/scenario_S<n>.info), live (config/scenario_live.info, the
+controller's 4-slot OCP), or the path of any scenario .info file.
 """
 import sys
 from pathlib import Path
@@ -20,18 +23,36 @@ import plot_utils as plt_ut  # noqa: E402
 from info_parser import load_info  # noqa: E402
 
 
+CONFIG_DIR = "src/legged_control/opti_pessi_interface/config/"
+
+
+def scenario_file(name):
+    """1-4 or S1-S4, live, or a path: the scenario file the node was run on."""
+    if name.endswith(".info") or os.path.isfile(name):
+        return name
+    if name.isdigit():
+        name = "S" + name
+    return CONFIG_DIR + "scenario_" + name + ".info"
+
+
+def obstacle_slots(scenario):
+    """Obstacle slots of the OCP: obstacles.numSlots, default obstacles.numObstacles (as the C++ loader)."""
+    obstacles = scenario["obstacles"]
+    return int(obstacles.get("numSlots", obstacles["numObstacles"]))
+
+
 def load_obstacles(path):
     y = np.load(path)
     return y[None, ...] if y.ndim == 2 else y
 
 
 def animate_trot(X, p0_next, p1_next, obstacles, start, goal, dt, horizon, fig_name,
-                 sub_steps=8, save=True, show=False):
+                 sub_steps=8, speed=1.0, save=True, show=False):
     """Animate the closed loop: for every CoM position show the matching p0+ / p1+ footholds.
 
     Between two simulation steps the CoM and the swinging foot are interpolated over `sub_steps`
     frames, so the diagonal pair that keeps its foothold reads as stance and the other one as
-    swing, i.e. a trot.
+    swing, i.e. a trot. `speed` multiplies the playback rate.
     """
     steps = dt.size
     if steps < 2:
@@ -108,8 +129,14 @@ def animate_trot(X, p0_next, p1_next, obstacles, start, goal, dt, horizon, fig_n
         ax.set_title("Trot, N = %d, t = %.2f s" % (horizon, dt[: i + 1].sum() - (1 - t) * dt[i]))
         return [com_trail, com_dot, support, foot0, foot1, swing_path, *obs_dots, *obs_trails]
 
-    fps = int(np.clip(round(sub_steps / max(dt.mean(), 1e-3)), 5, 30))
-    anim = FuncAnimation(fig, update, frames=n_frames, interval=1000.0 / fps, blit=False, repeat=True)
+    # GIF viewers clamp frame delays below 20 ms, so past 50 fps the speed-up drops frames instead.
+    base_fps = int(np.clip(round(sub_steps / max(dt.mean(), 1e-3)), 5, 30))
+    stride = max(1, int(np.ceil(speed * base_fps / 50.0)))
+    fps = speed * base_fps / stride
+    frames = list(range(0, n_frames, stride))
+    if frames[-1] != n_frames - 1:
+        frames.append(n_frames - 1)
+    anim = FuncAnimation(fig, update, frames=frames, interval=1000.0 / fps, blit=False, repeat=True)
 
     if save:
         out = Path(plt_ut.FIGURE_PATH) / (fig_name.replace(" ", "_") + "opti_pessi_trot.gif")
@@ -126,27 +153,28 @@ def main(argv):
         print(__doc__)
         return 1
 
-    task = load_info("src/legged_control/opti_pessi_interface/config/task.info")
-    scen = "src/legged_control/opti_pessi_interface/config/scenario_S"
-    ario = argv[1]
-    scenario = load_info(scen + ario + ".info")
-    # scenario = load_info(argv[2])
+    task = load_info(CONFIG_DIR + "task.info")
+    scenario = load_info(scenario_file(argv[1]))
 
     horizon = int(task["horizon"]["N"])
+    slots = obstacle_slots(scenario)
     start = np.array([float(task["initialState"]["(0,0)"]), float(task["initialState"]["(1,0)"])])
     goal = np.array([float(scenario["goal"]["(0,0)"]), float(scenario["goal"]["(1,0)"])])
     fig_name = scenario["simulation"]["figName"].strip('"')
     save_results = True
     save_dt = False
     clean_npy_files = True
-    save_animation = False
+    save_animation = True
     show_animation = False
     anim_sub_steps = 8
+    anim_speed = 10.0
 
     suffix = fig_name + "_opti_pessi.npy"
     X = np.load("x_quad_" + suffix)
     U = np.load("u_" + suffix)
     obstacles = load_obstacles("y_obs_" + suffix)
+    # Solve time of every step [s]; dumps written before 2026-10-15 have none.
+    solve_times = np.load("t_solve_" + suffix).ravel() if os.path.exists("t_solve_" + suffix) else np.empty(0)
 
     dt = U[5, :]
     steps = dt.size
@@ -170,7 +198,11 @@ def main(argv):
 
     # Closed-loop trajectory, fading in with simulation time.
     plt.figure()
-    plt.title("Opti-Pessi MPC, N = %d, sim_T = %.2f s" % (horizon, dt.sum()))
+    title = "OCS2, N = %d, %d obstacle slot%s, sim_T = %.2f s" % (horizon, slots, "" if slots == 1 else "s", dt.sum())
+    if solve_times.size:
+        # Mean without the first solve (CppAD warm-up), as the node prints it.
+        title += ", solve_T = %.2f ms" % (1e3 * np.mean(solve_times[1:] if solve_times.size > 1 else solve_times))
+    plt.title(title)
     fade = (1 - 0.4) / max(steps, 1)
     for i in range(steps):
         alpha = 0.2 + fade * (i + 1)
@@ -180,7 +212,8 @@ def main(argv):
         if i == steps - 1:
             plt.plot(X[0, i : i + 2], X[1, i : i + 2], "-c", label="Opti-Pessi MPC", alpha=alpha)
             for j in range(num_obstacles):
-                plt.plot(obstacles[j, 0, i : i + 2], obstacles[j, 1, i : i + 2], "-r", label="Obstacle", alpha=alpha)
+                plt.plot(obstacles[j, 0, i : i + 2], obstacles[j, 1, i : i + 2], "-r",
+                         label="Obstacle" if j == 0 else None, alpha=alpha)
     # Next footholds p0+ / p1+ and the support segment they span, fading like the CoM path.
     for i in range(steps):
         alpha = 0.2 + fade * (i + 1)
@@ -209,14 +242,15 @@ def main(argv):
     # Trot animation: CoM sliding along X with its p0+ / p1+ footholds at each step.
     if save_animation or show_animation:
         animate_trot(X, p0_next, p1_next, obstacles, start, goal, dt, horizon, fig_name,
-                     sub_steps=anim_sub_steps, save=save_animation, show=show_animation)
+                     sub_steps=anim_sub_steps, speed=anim_speed, save=save_animation, show=show_animation)
 
 
     if clean_npy_files:
         x_file = "x_quad_" + suffix
         u_file = "u_" + suffix
         y_file = "y_obs_" + suffix
-        npy_files_to_remove = [x_file, u_file, y_file]
+        t_file = "t_solve_" + suffix
+        npy_files_to_remove = [x_file, u_file, y_file, t_file]
         for f in npy_files_to_remove:
             if os.path.exists(f):
                 os.remove(f)

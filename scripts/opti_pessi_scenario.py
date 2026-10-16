@@ -54,7 +54,7 @@ SCENARIOS = {
     1: dict(goal=(1.0, 0.0), obstacle=(0.1, 1.0), movement="straight", speed=0.0, direction=(0.0, -1.0)),
     2: dict(goal=(2.0, 0.2), obstacle=(1.0, 1.0), movement="patrol", speed=0.45, direction=(0.0, -1.0)),
     3: dict(goal=(1.0, 0.2), obstacle=(0.3, 0.15), movement="circle", speed=0.375, direction=(0.0, -1.0)),
-    4: dict(goal=(1.0, 0.2), obstacle=(0.8, 0.3), movement="antagonist", speed=0.3, direction=(0.0, -1.0)),
+    4: dict(goal=(1.0, 0.2), obstacle=(0.3, 0.1), movement="antagonist", speed=0.45, direction=(0.0, -1.0)),
 }
 PATROL_LENGTH = 2.0 * SCALE
 

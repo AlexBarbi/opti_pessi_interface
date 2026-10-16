@@ -44,7 +44,7 @@ constexpr int kCollisionRowsPerObstacle = 12;
 
 /**
  * Parameters: hip offsets and left/right signs for THIS interval's stance pair and for the NEXT
- * knot's stance pair (the trot alternates), then one ObstacleP block (centre, radius, speed bound)
+ * knot's stance pair (the trot alternates), then one ObstacleP block (centre, radius, speed bound, active)
  * per obstacle and the pessimistic scale.
  */
 constexpr int kHipsAndSignsDim = 12;
@@ -167,10 +167,10 @@ StageInequalityConstraint::StageInequalityConstraint(OptiPessiModelParameters pa
       params_(std::move(params)),
       referenceManagerPtr_(&referenceManager) {
   numConstraints_ = static_cast<size_t>(stageInequalityCount(params_));
-  // The library name changed with the parameter layout (per-obstacle radius and speed bound): a library of the old
-  // layout left in libraryFolder must not be loaded when recompile is false.
+  // The library name changes with the parameter layout (last: ObstacleP::ACTIVE): a library of an old layout left in
+  // libraryFolder must not be loaded when recompile is false.
   initialize(static_cast<size_t>(params_.stateDim()), static_cast<size_t>(params_.inputDim()),
-             static_cast<size_t>(parameterDim(params_)), "opti_pessi_stage_inequality_typed", libraryFolder, recompile, true);
+             static_cast<size_t>(parameterDim(params_)), "opti_pessi_stage_inequality_slots", libraryFolder, recompile, true);
 }
 
 bool StageInequalityConstraint::isActive(scalar_t /*time*/) const {
@@ -186,7 +186,7 @@ vector_t StageInequalityConstraint::getParameters(scalar_t time, const ocs2::Pre
   const int numObstacles = params_.numObstacles();
   vector_t p = vector_t::Zero(parameterDim(params_));
   p.head(kHipsAndSignsDim) = hipsAndSignsParameters(params_, *referenceManagerPtr_, i);
-  p.segment(kHipsAndSignsDim, ObstacleP::DIM * numObstacles) = referenceManagerPtr_->getObstacleParameters();
+  p.segment(kHipsAndSignsDim, ObstacleP::DIM * numObstacles) = referenceManagerPtr_->getObstacleParameters(numObstacles);
   p(kHipsAndSignsDim + ObstacleP::DIM * numObstacles) = referenceManagerPtr_->getPessiScale();
   return p;
 }
@@ -230,6 +230,7 @@ ocs2::ad_vector_t StageInequalityConstraint::constraintFunction(ocs2::ad_scalar_
     for (int j = 0; j < numObstacles; ++j) {
       const int base = hyperplaneOffset + kHyperplaneVarsPerObs * j;
       const int obstacle = kHipsAndSignsDim + ObstacleP::DIM * j;
+      const int firstRow = idx;
       const Vec2 o(parameters(obstacle + ObstacleP::X), parameters(obstacle + ObstacleP::Y));
       const Scalar dMin = parameters(obstacle + ObstacleP::RADIUS) + parameters(obstacle + ObstacleP::MAX_SPEED) * keepOutTime;
 
@@ -248,6 +249,11 @@ ocs2::ad_vector_t StageInequalityConstraint::constraintFunction(ocs2::ad_scalar_
       g(idx++) = -(aLand.dot(p0Next) + bLand);
       g(idx++) = -(aLand.dot(p1Next) + bLand);
       appendObstacleRow(g, idx, aLand, bLand, o, dMin);
+
+      const Scalar active = parameters(obstacle + ObstacleP::ACTIVE);
+      for (int row = firstRow; row < idx; ++row) {
+        g(row) = slotRow(active, g(row));
+      }
     }
   };
 

@@ -42,41 +42,83 @@ vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_
   return u;
 }
 
-void seedHyperplanes(vector_t& input, int hyperplaneOffset, const OptiPessiModelParameters& params, const vector_t& robotState,
-                     const OptiPessiReferenceManager& referenceManager) {
+void seedHyperplane(vector_t& input, int hyperplaneOffset, int slot, const OptiPessiModelParameters& params, const vector_t& robotState,
+                    const vector_t& obstacleParameters) {
   const vector_t c = robotState.head(2);
   const scalar_t theta = robotState(RobotX::TH);
-  const matrix_t& obstacles = referenceManager.getObstacles();
+  const int obstacle = ObstacleP::DIM * slot;
+  vector_t o(2);
+  o << obstacleParameters(obstacle + ObstacleP::X), obstacleParameters(obstacle + ObstacleP::Y);
 
-  for (int j = 0; j < params.numObstacles(); ++j) {
-    // Normal points from the robot towards the obstacle.
-    vector_t a(2);
-    a(0) = obstacles(j, 0) - c(0);
-    a(1) = obstacles(j, 1) - c(1);
-    const scalar_t norm = a.norm();
-    if (norm < 1e-9) {
-      a << 1.0, 0.0;
-    } else {
-      a /= norm;
-    }
-
-    // Offset placed just past the most advanced robot point, so a^T y + b <= 0 holds for all hips.
-    scalar_t maxProjection = a.dot(c);
-    for (int f = 0; f < 4; ++f) {
-      const vector_t hipWorld = c + applyR(theta, hipOf(params, static_cast<Foot>(f)));
-      maxProjection = std::max(maxProjection, a.dot(hipWorld));
-    }
-    const scalar_t b = -maxProjection;
-
-    // Both planes get the same seed: at the initial guess the mid-step and landing poses coincide,
-    // and the solver separates them from there.
-    const int base = hyperplaneOffset + kHyperplaneVarsPerObs * j;
-    const scalar_t phi = std::atan2(a(1), a(0));
-    input(base + Hyperplane::MID_PHI) = phi;
-    input(base + Hyperplane::MID_B) = b;
-    input(base + Hyperplane::LAND_PHI) = phi;
-    input(base + Hyperplane::LAND_B) = b;
+  // Normal points from the robot towards the obstacle.
+  vector_t a = o - c;
+  const scalar_t norm = a.norm();
+  if (norm < 1e-9) {
+    a << 1.0, 0.0;
+  } else {
+    a /= norm;
   }
+
+  // Offset halfway between the most advanced robot point and the obstacle's disk, so a^T y + b <= 0 holds for all hips
+  // and every row starts with room on its side. A plane against the hips starts their rows at zero slack: the barrier
+  // then pushes the robot back from it (the first step went backwards at -0.5 m/s from rest), and for a slot parked
+  // 100 m off the plane has tens of metres to travel before a 50-iteration solve settles.
+  scalar_t maxProjection = a.dot(c);
+  for (int f = 0; f < 4; ++f) {
+    const vector_t hipWorld = c + applyR(theta, hipOf(params, static_cast<Foot>(f)));
+    maxProjection = std::max(maxProjection, a.dot(hipWorld));
+  }
+  const scalar_t gap = std::max(scalar_t(0), a.dot(o) - obstacleParameters(obstacle + ObstacleP::RADIUS) - maxProjection);
+  const scalar_t b = -(maxProjection + 0.5 * gap);
+
+  // Both planes get the same seed: at the initial guess the mid-step and landing poses coincide,
+  // and the solver separates them from there.
+  const int base = hyperplaneOffset + kHyperplaneVarsPerObs * slot;
+  const scalar_t phi = std::atan2(a(1), a(0));
+  input(base + Hyperplane::MID_PHI) = phi;
+  input(base + Hyperplane::MID_B) = b;
+  input(base + Hyperplane::LAND_PHI) = phi;
+  input(base + Hyperplane::LAND_B) = b;
+}
+
+void seedHyperplanes(vector_t& input, int hyperplaneOffset, const OptiPessiModelParameters& params, const vector_t& robotState,
+                     const OptiPessiReferenceManager& referenceManager) {
+  const vector_t obstacleParameters = referenceManager.getObstacleParameters(params.numObstacles());
+  for (int j = 0; j < params.numObstacles(); ++j) {
+    seedHyperplane(input, hyperplaneOffset, j, params, robotState, obstacleParameters);
+  }
+}
+
+ocs2::PrimalSolution remapObstacleSlots(const ocs2::PrimalSolution& solution, const std::vector<int>& fromIds,
+                                        const std::vector<int>& toIds, const OptiPessiModelParameters& toParams,
+                                        const OptiPessiReferenceManager& referenceManager) {
+  const int fromSlots = static_cast<int>(fromIds.size());
+  const int toSlots = toParams.numObstacles();
+  const vector_t obstacleParameters = referenceManager.getObstacleParameters(toSlots);
+
+  ocs2::PrimalSolution out = solution;
+  for (size_t k = 0; k < solution.inputTrajectory_.size(); ++k) {
+    const vector_t& from = solution.inputTrajectory_[k];
+    vector_t to = vector_t::Zero(augInputDim(toSlots));
+    to.head(2 * RobotU::DIM) = from.head(2 * RobotU::DIM);
+    // The branches' states at this knot, where a new obstacle's planes are seeded from.
+    const vector_t& state = solution.stateTrajectory_[std::min(k, solution.stateTrajectory_.size() - 1)];
+    for (int j = 0; j < toSlots; ++j) {
+      const auto previous = std::find(fromIds.begin(), fromIds.end(), toIds[static_cast<size_t>(j)]);
+      if (toIds[static_cast<size_t>(j)] >= 0 && previous != fromIds.end()) {
+        const int i = static_cast<int>(previous - fromIds.begin());
+        to.segment(optiHyperplaneOffset() + kHyperplaneVarsPerObs * j, kHyperplaneVarsPerObs) =
+            from.segment(optiHyperplaneOffset() + kHyperplaneVarsPerObs * i, kHyperplaneVarsPerObs);
+        to.segment(pessiHyperplaneOffset(toSlots) + kHyperplaneVarsPerObs * j, kHyperplaneVarsPerObs) =
+            from.segment(pessiHyperplaneOffset(fromSlots) + kHyperplaneVarsPerObs * i, kHyperplaneVarsPerObs);
+      } else {
+        seedHyperplane(to, optiHyperplaneOffset(), j, toParams, state.segment(0, RobotX::DIM), obstacleParameters);
+        seedHyperplane(to, pessiHyperplaneOffset(toSlots), j, toParams, state.segment(RobotX::DIM, RobotX::DIM), obstacleParameters);
+      }
+    }
+    out.inputTrajectory_[k] = std::move(to);
+  }
+  return out;
 }
 
 vector_t augmentedLipStep(const OptiPessiModelParameters& params, const vector_t& augmentedState, const vector_t& augmentedInput) {

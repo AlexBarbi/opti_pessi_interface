@@ -1,5 +1,8 @@
 #pragma once
 
+#include <random>
+#include <vector>
+
 #include "opti_pessi_interface/OptiPessiModelParameters.h"
 #include "opti_pessi_interface/definitions.h"
 
@@ -10,11 +13,13 @@ namespace opti_pessi {
  * ever receives the current measured centres and the speed bound v_obs.
  */
 struct ObstaclePlant {
-  matrix_t positions;  // numObstacles x 2
-  matrix_t direction;  // numObstacles x 2, current heading (patrol flips it)
+  matrix_t positions;  // plant obstacles x 2
+  matrix_t direction;  // plant obstacles x 2, current heading (patrol flips it)
   vector_t radius;     // circle mode: orbit radius about the goal
   vector_t phase;      // circle mode: current angle
-  bool circleInitialized = false;
+  std::vector<bool> circleInitialized;  // circle mode, per obstacle: radius and phase taken from the start position
+  vector_t heading;                     // random mode: current heading, starting along plant.direction
+  std::mt19937 rng;                     // random mode: the heading noise, seeded with plant.randomSeed
 };
 
 ObstaclePlant makeObstaclePlant(const OptiPessiModelParameters& params);

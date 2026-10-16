@@ -9,7 +9,7 @@
 
 namespace opti_pessi {
 
-enum class ObstacleMovement { Straight, Patrol, Circle, Antagonist };
+enum class ObstacleMovement { Straight, Patrol, Circle, Antagonist, Random };
 
 ObstacleMovement obstacleMovementFromString(const std::string& name);
 std::string toString(ObstacleMovement movement);
@@ -76,17 +76,20 @@ struct OptiPessiModelParameters {
   }};
 
   // --- scenario: goal and obstacles ---
-  // numObstacles is also the number of obstacle slots of the OCP (it sizes the input): a controller fed from topics
-  // tracks at most that many obstacles at once.
+  // numSlots is the number of obstacle slots of the OCP (it sizes the input): a controller fed from topics tracks at most
+  // that many obstacles at once. The scenario's own obstacles (the plant of the closed-loop simulation) are separate.
   vector_t goal = vector_t::Zero(2);
-  matrix_t obstaclePositions;      // numObstacles x 2, initial/measured centres
+  int numSlots = 1;                // obstacles.numSlots, default obstacles.numObstacles
+  matrix_t obstaclePositions;      // plant obstacles x 2, initial centres
   scalar_t obstacleRadius = 0.2;   // r_obs [m], of every scenario obstacle
   scalar_t obstacleMaxSpeed = 1.0; // v_obs [m/s], of every scenario obstacle
 
   // --- scenario: obstacle plant (ground truth, unknown to the OCP) ---
   std::vector<ObstacleMovement> obstacleMovement;
-  vector_t obstacleSpeed;  // numObstacles, the TRUE speed
-  matrix_t obstacleDir;    // numObstacles x 2
+  vector_t obstacleSpeed;  // plant obstacles, the TRUE speed
+  matrix_t obstacleDir;    // plant obstacles x 2
+  vector_t randomBounds;        // [xMin, xMax, yMin, yMax], the walls of the random movement
+  unsigned int randomSeed = 0;  // of the random movement's heading noise
 
   // --- scenario: closed-loop simulation ---
   scalar_t simTime = 30.0;
@@ -96,7 +99,11 @@ struct OptiPessiModelParameters {
   /** LIP natural frequency omega = sqrt(g/h). */
   scalar_t omega() const { return std::sqrt(gravity / comHeight); }
 
-  int numObstacles() const { return static_cast<int>(obstaclePositions.rows()); }
+  /** Obstacle slots of the OCP. */
+  int numObstacles() const { return numSlots; }
+
+  /** Scripted obstacles of the scenario's plant (closed-loop simulation only). */
+  int numPlantObstacles() const { return static_cast<int>(obstaclePositions.rows()); }
 
   int stateDim() const { return AUG_STATE_DIM; }
   int inputDim() const { return augInputDim(numObstacles()); }

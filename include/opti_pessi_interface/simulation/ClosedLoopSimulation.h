@@ -2,7 +2,6 @@
 
 #include <vector>
 
-#include <ocs2_ipm/IpmMpc.h>
 
 #include "opti_pessi_interface/OptiPessiInterface.h"
 #include "opti_pessi_interface/definitions.h"
@@ -15,7 +14,7 @@ struct ClosedLoopResult {
   matrix_t inputTrajectory;                       // 8 x steps
   matrix_t stanceHip0;                            // 2 x steps, world position of the first stance hip
   matrix_t stanceHip1;                            // 2 x steps
-  std::vector<matrix_t> obstacleTrajectories;     // numObstacles slices of 2 x (steps + 1)
+  std::vector<matrix_t> obstacleTrajectories;     // one 2 x (steps + 1) slice per plant obstacle
   vector_t solveTimes;                            // steps, wall-clock seconds per MPC iteration
   vector_t appliedPessiScale;                     // steps, keep-out growth factor actually achieved
   bool collision = false;
@@ -65,9 +64,14 @@ struct ClosedLoopResult {
  * fallbackSteps. RTI bounds the computation per step; it does not make a bad step safe to execute.
  * relaxedSteps stays 0 in this mode because the keep-out continuation never runs.
  *
- * @param mpc  ocs2::IpmMpc built for this interface's problem and bound to its reference manager.
+ * OBSTACLE SLOTS
+ *
+ * Every step solves the OCP with one slot per obstacle in the reference manager (OptiPessiInterface::ocpSlots()), each
+ * size with its own ocs2::IpmSolver, as the controller does (OptiPessiMpc). When the obstacles in the slots change, the
+ * warm start is remapped to them (remapObstacleSlots()).
+ *
+ * @param interface  set up (setupOptimalControlProblem()) for the IPM backend.
  */
-ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, ocs2::IpmMpc& mpc, bool verbose,
-                                         bool realTimeIteration = false);
+ClosedLoopResult runClosedLoopSimulation(OptiPessiInterface& interface, bool verbose, bool realTimeIteration = false);
 
 }  // namespace opti_pessi

@@ -34,19 +34,32 @@ void alignYawBranch(ocs2::PrimalSolution& guess, const vector_t& robotState) {
 
 }  // namespace
 
-OptiPessiMpc::OptiPessiMpc(ocs2::mpc::Settings mpcSettings, ocs2::ipm::Settings settings,
-                           const ocs2::OptimalControlProblem& optimalControlProblem, const ocs2::Initializer& initializer,
-                           std::shared_ptr<OptiPessiReferenceManager> referenceManagerPtr, OptiPessiModelParameters params)
-    : MPC_BASE(std::move(mpcSettings)),
-      referenceManagerPtr_(std::move(referenceManagerPtr)),
-      params_(std::move(params)),
-      iterationCap_(settings.ipmIteration) {
-  solverPtr_ = std::make_unique<ocs2::IpmSolver>(std::move(settings), optimalControlProblem, initializer);
+OptiPessiMpc::OptiPessiMpc(const OptiPessiInterface& interface)
+    : MPC_BASE(interface.mpcSettings()),
+      interface_(interface),
+      referenceManagerPtr_(interface.getOptiPessiReferenceManagerPtr()),
+      params_(interface.modelParameters()),
+      iterationCap_(interface.ipmSettings().ipmIteration) {
+  for (int numSlots = 1; numSlots <= interface.numObstacles(); ++numSlots) {
+    solvers_.push_back(std::make_unique<ocs2::IpmSolver>(interface.ipmSettings(), interface.getOptimalControlProblem(numSlots),
+                                                          interface.getInitializer(numSlots)));
+  }
+  activeSolver_ = solvers_.size() - 1;
+}
+
+void OptiPessiMpc::setReferenceManager(std::shared_ptr<ocs2::ReferenceManagerInterface> referenceManagerPtr) {
+  for (auto& solver : solvers_) {
+    solver->setReferenceManager(referenceManagerPtr);
+  }
 }
 
 void OptiPessiMpc::reset() {
   MPC_BASE::reset();
+  for (auto& solver : solvers_) {
+    solver->reset();
+  }
   hasSolution_ = false;
+  lastObstacleIds_.clear();
   published_ = false;
   solverFailed_ = false;
 }
@@ -55,21 +68,23 @@ bool OptiPessiMpc::run(scalar_t currentTime, const vector_t& currentState) {
   return MPC_BASE::run(currentTime, currentState) && published_;
 }
 
-bool OptiPessiMpc::solve(const vector_t& robotState, const ocs2::PrimalSolution* guess, ocs2::PrimalSolution& solution) {
+bool OptiPessiMpc::solve(const vector_t& robotState, const ocs2::PrimalSolution* guess, bool freshDuals,
+                         ocs2::PrimalSolution& solution) {
   const vector_t initialState = packInitialState(robotState);
   const scalar_t finalTime = static_cast<scalar_t>(params_.N);
+  ocs2::IpmSolver& solver = *solvers_[activeSolver_];
   try {
     // The guess sets only the primal trajectories: the solver warm-starts its slacks and duals from its own previous run.
-    // A cold start, and a warm start after a failed run, clear them first.
-    if (guess == nullptr || solverFailed_) {
-      solverPtr_->reset();
+    // A cold start, a warm start after a failed run and one for other obstacles clear them first.
+    if (guess == nullptr || solverFailed_ || freshDuals) {
+      solver.reset();
     }
     if (guess != nullptr) {
-      solverPtr_->run(0.0, initialState, finalTime, *guess);
+      solver.run(0.0, initialState, finalTime, *guess);
     } else {
-      solverPtr_->run(0.0, initialState, finalTime);
+      solver.run(0.0, initialState, finalTime);
     }
-    solution = solverPtr_->primalSolution(finalTime);
+    solution = solver.primalSolution(finalTime);
   } catch (const std::exception&) {
     solverFailed_ = true;
     return false;
@@ -93,6 +108,11 @@ void OptiPessiMpc::calculateController(scalar_t /*initTime*/, const vector_t& in
   const int gaitOffset = referenceManagerPtr_->getGaitOffset();
   const vector_t robotState = extractRobotState(initState);
 
+  // The OCP with one slot per obstacle present, and the obstacle each of its slots holds.
+  const int numSlots = interface_.ocpSlots(referenceManagerPtr_->numActiveObstacles());
+  const std::vector<int> obstacleIds = referenceManagerPtr_->getObstacleIds(numSlots);
+  activeSolver_ = static_cast<size_t>(numSlots - 1);
+
   // Warm start from the last solution: as it is on the same problem, shifted one knot on the next phase. The start state
   // is compared too because a walk restarts at phase 0 without this object being told. Anything else starts cold.
   const char* warmStart = "cold";
@@ -111,32 +131,43 @@ void OptiPessiMpc::calculateController(scalar_t /*initTime*/, const vector_t& in
       guessPtr = &guess;
     }
   }
+  const bool samePhase = guessPtr == &lastSolution_;
+
+  // Other obstacles in the slots than in the warm start (one more, one less, one replaced): each remaining obstacle keeps
+  // its planes, a new one gets them seeded, and the solver of this size starts its slacks and duals afresh.
+  const bool obstaclesChanged = guessPtr != nullptr && obstacleIds != lastObstacleIds_;
+  if (obstaclesChanged) {
+    guess = remapObstacleSlots(*guessPtr, lastObstacleIds_, obstacleIds, interface_.modelParameters(numSlots), *referenceManagerPtr_);
+    guessPtr = &guess;
+  }
 
   // The warm start, then a cold start if the solver failed on it. Nothing else.
   const auto solveStart = std::chrono::steady_clock::now();
-  const bool samePhase = guessPtr == &lastSolution_;
   ocs2::PrimalSolution solution;
-  bool solved = solve(robotState, guessPtr, solution);
+  bool solved = solve(robotState, guessPtr, obstaclesChanged, solution);
   const bool coldRetry = !solved && guessPtr != nullptr;
   if (coldRetry) {
     warmStart = "cold retry";
-    solved = solve(robotState, nullptr, solution);
+    solved = solve(robotState, nullptr, true, solution);
   }
   const scalar_t solveTime = std::chrono::duration<scalar_t, std::milli>(std::chrono::steady_clock::now() - solveStart).count();
 
   // Statistics first: a controller that reads the plan as soon as it is published then finds the statistics of its solve.
+  ocs2::IpmSolver& solver = *solvers_[activeSolver_];
   SolveStatistics statistics;
   statistics.gaitOffset = gaitOffset;
   statistics.warmStart = warmStart;
+  statistics.obstacleSlots = numSlots;
+  statistics.obstaclesChanged = obstaclesChanged;
   statistics.solved = solved;
   try {
-    statistics.numIterations = solverPtr_->getIterationsLog().size();
-    statistics.performance = solverPtr_->getPerformanceIndeces();
+    statistics.numIterations = solver.getIterationsLog().size();
+    statistics.performance = solver.getPerformanceIndeces();
   } catch (const std::exception&) {
     // The solver failed before its first iteration: it has no log.
   }
   // The profile is read here, on the thread that runs the solver, so no other thread touches the solver's timers.
-  std::string solverProfile = solverPtr_->getBenchmarkingInfo();
+  std::string solverProfile = solver.getBenchmarkingInfo();
   {
     std::lock_guard<std::mutex> lock(statisticsMutex_);
     lastSolveStatistics_ = statistics;
@@ -145,6 +176,7 @@ void OptiPessiMpc::calculateController(scalar_t /*initTime*/, const vector_t& in
     totals_.shifted += guessPtr != nullptr && !samePhase ? 1 : 0;
     totals_.cold += guessPtr == nullptr ? 1 : 0;
     totals_.coldRetries += coldRetry ? 1 : 0;
+    totals_.obstacleChanges += obstaclesChanged ? 1 : 0;
     totals_.unsolved += solved ? 0 : 1;
     totals_.iterations += statistics.numIterations;
     totals_.atIterationCap += statistics.numIterations >= iterationCap_ ? 1 : 0;
@@ -167,6 +199,7 @@ void OptiPessiMpc::calculateController(scalar_t /*initTime*/, const vector_t& in
     plan.inputs.push_back(extractRobotInput(solution.inputTrajectory_[k]));
   }
   lastSolution_ = std::move(solution);
+  lastObstacleIds_ = obstacleIds;
   lastGaitOffset_ = gaitOffset;
   lastStartState_ = robotState;
   hasSolution_ = true;

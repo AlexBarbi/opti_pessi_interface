@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <ocs2_core/initialization/Initializer.h>
 #include <ocs2_oc/oc_data/PrimalSolution.h>
 
@@ -46,9 +48,26 @@ vector_t extractRobotInput(const vector_t& augmentedInput);
 /** Nominal per-branch input at a knot: footholds under the next hips, centred CoP, preferred dt. */
 vector_t defaultRobotInput(const OptiPessiModelParameters& params, const vector_t& robotState, int knotParity);
 
-/** Seeds one branch's (a, b) hyperplane block from the current robot-to-obstacle direction. */
+/**
+ * Seeds the (phi, b) planes of OCP slot `slot` in one branch's hyperplane block from the robot-to-obstacle direction,
+ * halfway between the robot's hips and the obstacle's disk. `obstacleParameters`: as
+ * OptiPessiReferenceManager::getObstacleParameters() for this OCP's slot count.
+ */
+void seedHyperplane(vector_t& input, int hyperplaneOffset, int slot, const OptiPessiModelParameters& params, const vector_t& robotState,
+                    const vector_t& obstacleParameters);
+
+/** Seeds every slot of one branch's hyperplane block (params.numObstacles() slots). */
 void seedHyperplanes(vector_t& input, int hyperplaneOffset, const OptiPessiModelParameters& params, const vector_t& robotState,
                      const OptiPessiReferenceManager& referenceManager);
+
+/**
+ * A solution of the OCP whose slots held the obstacles `fromIds`, as a guess for the OCP of `toParams` whose slots hold
+ * `toIds` (OptiPessiReferenceManager::getObstacleIds()): states and robot inputs as they are, the planes of an obstacle in
+ * both moved to its new slot, those of a new obstacle or a free slot seeded (seedHyperplane()) at each knot's state.
+ */
+ocs2::PrimalSolution remapObstacleSlots(const ocs2::PrimalSolution& solution, const std::vector<int>& fromIds,
+                                        const std::vector<int>& toIds, const OptiPessiModelParameters& toParams,
+                                        const OptiPessiReferenceManager& referenceManager);
 
 /** One augmented step: advance both branches through the LIP map and tick the clock. */
 vector_t augmentedLipStep(const OptiPessiModelParameters& params, const vector_t& augmentedState, const vector_t& augmentedInput);

@@ -19,16 +19,17 @@ TerminalObstacleConstraint::TerminalObstacleConstraint(OptiPessiModelParameters 
     hullRadius_ = std::max(hullRadius_, hip.norm());
   }
 
-  // Parameters: one ObstacleP block per obstacle, then the pessimistic scale. The library name changed with that
-  // layout, so a library of the old layout left in libraryFolder is not loaded when recompile is false.
+  // Parameters: one ObstacleP block per obstacle, then the pessimistic scale. The library name changes with that
+  // layout (last: ObstacleP::ACTIVE), so a library of an old layout left in libraryFolder is not loaded when recompile
+  // is false.
   initialize(static_cast<size_t>(params_.stateDim()), static_cast<size_t>(ObstacleP::DIM * params_.numObstacles() + 1),
-             "opti_pessi_terminal_obstacle_typed", libraryFolder, recompile, true);
+             "opti_pessi_terminal_obstacle_slots", libraryFolder, recompile, true);
 }
 
 vector_t TerminalObstacleConstraint::getParameters(scalar_t, const ocs2::PreComputation&) const {
   const int numObstacles = params_.numObstacles();
   vector_t p(ObstacleP::DIM * numObstacles + 1);
-  p.head(ObstacleP::DIM * numObstacles) = referenceManagerPtr_->getObstacleParameters();
+  p.head(ObstacleP::DIM * numObstacles) = referenceManagerPtr_->getObstacleParameters(numObstacles);
   p(ObstacleP::DIM * numObstacles) = referenceManagerPtr_->getPessiScale();
   return p;
 }
@@ -53,7 +54,7 @@ ocs2::ad_vector_t TerminalObstacleConstraint::constraintFunction(ocs2::ad_scalar
       const Scalar required = parameters(obstacle + ObstacleP::RADIUS) + parameters(obstacle + ObstacleP::MAX_SPEED) * keepOutTime +
                               Scalar(hullRadius_);
       // Squared form keeps this smooth at c == o.
-      g(idx++) = (c - o).squaredNorm() - required * required;
+      g(idx++) = slotRow(Scalar(parameters(obstacle + ObstacleP::ACTIVE)), Scalar((c - o).squaredNorm() - required * required));
     }
   };
 

@@ -17,7 +17,7 @@ trajectory.
 ## Layout
 
 ```
-config/     task.info (model, cost, limits, horizon, ipm/mpc/rollout) + scenario_S1..S4.info
+config/     task.info (model, cost, limits, horizon, ipm/mpc/rollout) + scenario_S1..S5.info + scenario_live.info (controller)
 include/opti_pessi_interface/
   definitions.h                     state/input layout, augmented dimensions, TIME CONVENTION note
   OptiPessiModelParameters.h        everything loaded from the .info files
@@ -27,7 +27,7 @@ include/opti_pessi_interface/
   OptiPessiMpc.h                    : ocs2::MPC_BASE run by OptiPessiController, publishes one Plan per solve
   dynamics/ cost/ constraint/ initialization/ simulation/
 src/                                mirrors include/, plus OptiPessiMpcNode.cpp (executable)
-test/                               testLipStep, testConfigLoading, testS4ClosedLoop
+test/                               testObstacleSlots, testHyperplaneSeed, testFreeSlots (gtest), test_opti_pessi_scenario.py
 python/                             plot_mpc.py (reads the same .info files), info_parser.py
 ```
 
@@ -43,6 +43,18 @@ colcon build --symlink-install --packages-select opti_pessi_interface
 
 The node writes `x_quad_*.npy`, `u_*.npy` and `y_obs_*.npy` into the working directory; plot them
 with `python/plot_mpc.py <taskFile> <scenarioFile>`.
+
+The closed loop hands the scenario's scripted obstacles to the OCP the way the controller hands it
+perception's: through `OptiPessiReferenceManager::setObservedObstacles()`. A scenario's
+`obstacles.numSlots` (default `obstacles.numObstacles`) sets the OCP's slots apart from the scripted
+obstacles: `scenario_live.info` runs S1's obstacle in the controller's 4-slot OCP. Collisions are
+checked at every step against every scripted obstacle (until 2026-10-15 only on failed solves, and
+only against obstacle 0).
+
+Measured 2026-10-15 with `task.info` as it was (N 6, `ipmIteration 50`, simTime 20 s): no scenario
+reaches its goal within 20 s (S1 1.14 m short, `scenario_live.info` 1.18 m), with no collision.
+The closed loop solves once per step, while the controller re-solves each phase about five times. With
+`ipmIteration 300`, S1 ends 0.08 m and S3 0.01 m from the goal.
 
 ## On the robot: OptiPessiController and OptiPessiWbc
 
@@ -83,7 +95,7 @@ reference manager from the MPC thread, so they cannot change while a solve is ru
 | --- | --- | --- |
 | `urdfFile`, `taskFile`, `referenceFile` | `legged_controllers/config/<robot_type>/…` | whole-body model, estimator and WBC settings |
 | `optipessiFile` | `opti_pessi_interface/config/task.info` | this package's model, cost, limits, solver settings |
-| `scenarioFile` | `config/scenario_S1.info` | obstacle slot count (`obstacles.numObstacles`) and `goalTolerance`; obstacles themselves come from the topic |
+| `scenarioFile` | `config/scenario_live.info` | obstacle slot count (`obstacles.numSlots`, 4) and `goalTolerance`; obstacles themselves come from the topic |
 | `libraryFolder` | `opti_pessi_interface/lib` (install share) | CppAD libraries, one subfolder per robot model |
 | `recompile` | `false` | regenerate the CppAD libraries |
 | `backend` | `Ipm` | `Ipm` or `Sqp` |
@@ -91,8 +103,11 @@ reference manager from the MPC thread, so they cannot change while a solve is ru
 
 The LIP mass and yaw inertia come from the URDF (total mass, and the composite inertia about the
 vertical axis at the default stance and `comHeight`), not from `task.info`. Both are compiled into the
-CppAD libraries, so each model gets its own folder `libraryFolder/m<mass>_I<inertia>`, for example
-`lib/m22.647_I1.3721`. **Every `task.info` value is compiled in too**: after editing `task.info`,
+CppAD libraries, and the obstacle slot count sizes their input and parameters, so each model and slot
+count gets its own folder `libraryFolder/m<mass>_I<inertia>_o<slots>`, for example
+`lib/m22.949_I1.4002_o4`, with one subfolder `slots1` ... `slots<N>` per OCP size (see "Goal and obstacles"). A
+missing folder is generated at launch (about 5 s a size), so changing `numSlots` needs no
+`recompile:=true`. **Every `task.info` value is compiled in too**: after editing `task.info`,
 relaunch with `recompile:=true`, or the change has no effect.
 
 ### Startup
@@ -147,7 +162,7 @@ stance pair stays down unloaded, and the next phase is measured.
 
 **Goal reached.** When the measured CoM is within the scenario's `goalTolerance` of the goal, the
 controller logs it once for that goal and does nothing else. The MPC keeps running, so the robot steps in
-place at the goal and follows a new goal at once, with no restart. With `scenario_S1.info` the tolerance
+place at the goal and follows a new goal at once, with no restart. With `scenario_live.info` the tolerance
 is 0.01 m.
 
 ### Goal and obstacles
@@ -161,9 +176,31 @@ Both must be in `odom`, the frame the LIP state is measured in. The controller d
 ignores other frames. An obstacle's `type` (`HUMAN = 0`, `CAR = 1`) selects its keep-out radius and
 speed bound from `obstacleTypes` in `config/task.info` (human 0.3 m, 1.0 m/s; car 2.4 m, 2.0 m/s).
 
-The OCP has a fixed number of obstacle slots, `obstacles.numObstacles` in the scenario file. With more
-obstacles than slots, the ones whose keep-out disks come closest to the CoM take the slots. Free slots
-hold a point obstacle with zero radius and zero speed bound, parked 100 m away.
+At most `obstacles.numSlots` obstacles are kept out at once (4 in `scenario_live.info`, as many as
+`obstacle_adapter` publishes). The controller passes every obstacle with its type's radius and speed
+bound to `OptiPessiReferenceManager::setObservedObstacles()`, which tracks them in that many slots:
+
+* with more obstacles than slots, the ones whose keep-out disks come closest to the CoM take them;
+* each obstacle carries its own warm-started hyperplanes, so it keeps its slot and its id from one
+  solve to the next: the obstacle nearest to a slot's previous centre, within 1 m, is the same one. A
+  new obstacle gets a new id and takes a slot that was free, else one whose obstacle has gone.
+
+Every slot costs as much free as taken: its 8 plane variables and its 24 inequality rows per knot (12
+per branch, plus 2 at the final knot) are differentiated and solved whether an obstacle is in it or
+not. So there is one OCP per size, 1 to `numSlots` slots, each with its own CppAD libraries and IPM
+solver, and every solve uses the one with a slot per obstacle present (`OptiPessiInterface::ocpSlots()`,
+at least one). Its slots hold the tracked obstacles in slot order (`getObstacleParameters(numSlots)`).
+With no obstacle the one slot is inactive (`ObstacleP::ACTIVE` 0: its rows are the constant 1 and
+constrain nothing).
+
+When the obstacles in the slots change (one more, one less, one replaced), `OptiPessiMpc` remaps the
+warm start (`remapObstacleSlots()`): each obstacle still present keeps its planes, moved to its new
+slot; a new one gets them seeded halfway between the hips and its disk; the solver of that size starts
+its slacks and duals afresh. The per-phase `plan:` line logs the slots of the latest solve
+(`obstacleSlots=`), the solver statistics count the remaps.
+
+Measured in Gazebo, 50 iterations: 9 ms a solve with one obstacle, 15 ms with two, 33 ms with four.
+Before 2026-10-15 every solve used the 4-slot OCP, 33 ms with any number of obstacles.
 
 ### What OptiPessiMpc publishes
 

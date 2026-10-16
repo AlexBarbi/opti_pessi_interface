@@ -1,0 +1,67 @@
+; Scenario S5 -- four obstacles at once, in an OCP with four slots: one static to the left of the way,
+; one patrolling across it, one static to the right, one orbiting the goal.
+; Not in the Python reference (S1-S4 only). The start is task.info's initialState, (-0.8, -0.5).
+; plant.direction is unused by the circle law but must still be present.
+
+goal
+{
+  (0,0)  3.5
+  (1,0)  0.0
+}
+
+obstacles
+{
+  numSlots      4
+  numObstacles  4
+  radius        0.2   ; r_obs [m], of every obstacle
+  maxSpeed      0.75   ; v_obs [m/s] -- the bound the pessimistic branch is robust against
+
+  ; Measured centres at t = 0, one row per obstacle.
+  positions
+  {
+    (0,0)  0.8    ; [0] static, 1.5 m left of the straight way
+    (0,1)  1.2
+    (1,0)  2.0    ; [1] patrol, sweeps y 1.5 -> -0.5 and back across the way
+    (1,1)  1.5
+    (2,0)  2.6    ; [2] static, 1.5 m right of the straight way
+    (2,1) -1.6
+    (3,0)  3.5    ; [3] circle about the goal, 2.5 m out
+    (3,1)  1.5
+  }
+}
+
+plant
+{
+  movement
+  {
+    [0]  straight
+    [1]  patrol
+    [2]  straight
+    [3]  circle
+  }
+  speed
+  {
+    [0]  0.0
+    [1]  0.75
+    [2]  0.0
+    [3]  0.55
+  }
+  direction
+  {
+    (0,0)  0.0
+    (0,1)  0.0
+    (1,0)  0.0
+    (1,1) -1.0
+    (2,0)  0.0
+    (2,1)  0.0
+    (3,0)  0.0
+    (3,1)  0.0
+  }
+}
+
+simulation
+{
+  simTime        30.0
+  goalTolerance  0.01
+  figName        "mpc_sim_5_"
+}
